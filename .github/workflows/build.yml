@@ -213,6 +213,8 @@ jobs:
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
+          # Fix ownership after extraction (tar may create root-owned files)
+          sudo chown -R "$USER:$USER" "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           PATCH_DIR="patches/${{ matrix.platform }}"
           SRCDIR="/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           cd "$SRCDIR"
@@ -235,13 +237,17 @@ jobs:
 
       # --------------------------------------------------------
       # Merge kernel config (3-layer)
+      # Run as current user (not sudo) so the build step can
+      # write to the same files without permission errors
       # --------------------------------------------------------
       - name: Merge kernel config
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
+          # Ensure build dir is owned by current user
+          sudo chown -R "$USER:$USER" "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           chmod +x scripts/merge_kernel_config.sh
-          sudo scripts/merge_kernel_config.sh \
+          scripts/merge_kernel_config.sh \
             --kernel-src "/var/tmp/kernel-build/linux-${KERNEL_FULL}" \
             --codename "${{ matrix.codename }}" \
             --platform "${{ matrix.platform }}" \
