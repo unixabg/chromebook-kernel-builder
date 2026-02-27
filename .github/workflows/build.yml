@@ -1,0 +1,379 @@
+name: Build Chromebook Kernels
+
+on:
+  # Run weekly on Sunday at 02:00 UTC to pick up new kernel point releases
+  schedule:
+    - cron: '0 2 * * 0'
+
+  # Run on push to main (e.g. config or patch changes)
+  push:
+    branches: [ main ]
+    paths:
+      - 'configs/**'
+      - 'patches/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+
+  # Allow manual trigger with optional kernel version override
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: 'Kernel series override (e.g. 6.6 or 6.12), leave blank for default'
+        required: false
+        default: ''
+      platform_filter:
+        description: 'Build only this platform (e.g. amd-stoneyridge), leave blank for all'
+        required: false
+        default: ''
+
+jobs:
+  # ============================================================
+  # Resolve the kernel version once, share across all matrix jobs
+  # ============================================================
+  resolve-version:
+    name: Resolve kernel version
+    runs-on: ubuntu-24.04
+    outputs:
+      kernel_series: ${{ steps.resolve.outputs.kernel_series }}
+      kernel_full: ${{ steps.resolve.outputs.kernel_full }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve kernel version
+        id: resolve
+        run: |
+          # Use workflow_dispatch input if provided, else read from configs
+          if [[ -n "${{ github.event.inputs.kernel_version }}" ]]; then
+            SERIES="${{ github.event.inputs.kernel_version }}"
+          else
+            SERIES=$(grep "^DEFAULT_SERIES=" configs/kernel_versions.conf | cut -d= -f2)
+          fi
+          echo "Kernel series: $SERIES"
+          echo "kernel_series=$SERIES" >> "$GITHUB_OUTPUT"
+
+          # Resolve latest point release in this series
+          FULL=$(curl -s --max-time 15 "https://www.kernel.org/releases.json" | \
+            grep -o '"version": *"[0-9]*\.[0-9]*\.[0-9]*"' | \
+            grep -o '"[0-9]*\.[0-9]*\.[0-9]*"' | \
+            tr -d '"' | \
+            grep "^${SERIES}\." | \
+            sort -t. -k1,1n -k2,2n -k3,3n | \
+            tail -1)
+
+          if [[ -z "$FULL" ]]; then
+            echo "ERROR: Could not resolve latest ${SERIES}.x from kernel.org"
+            exit 1
+          fi
+          echo "Resolved: linux-$FULL"
+          echo "kernel_full=$FULL" >> "$GITHUB_OUTPUT"
+
+  # ============================================================
+  # Build matrix - one job per platform
+  # ============================================================
+  build:
+    name: Build ${{ matrix.platform }} (${{ matrix.codename }})
+    needs: resolve-version
+    runs-on: ubuntu-24.04
+
+    strategy:
+      # Don't cancel all jobs if one platform fails
+      fail-fast: false
+      matrix:
+        include:
+          - platform: amd-stoneyridge
+            codename: aleena
+          - platform: amd-ryzen-zork
+            codename: zork
+          - platform: amd-mendocino
+            codename: mendocino
+          - platform: intel-cometlake
+            codename: hatch
+          - platform: intel-tigerlake
+            codename: volteer
+          - platform: intel-alderlake
+            codename: brya
+
+    steps:
+      - name: Check platform filter
+        if: >
+          github.event.inputs.platform_filter != '' &&
+          github.event.inputs.platform_filter != matrix.platform
+        run: |
+          echo "Skipping ${{ matrix.platform }} (filter: ${{ github.event.inputs.platform_filter }})"
+          exit 0
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Cache the kernel source tarball - keyed by full version
+      # Saves ~140MB download on repeat runs for same version
+      # --------------------------------------------------------
+      - name: Cache kernel tarball
+        uses: actions/cache@v4
+        with:
+          path: /var/tmp/kernel-tarballs
+          key: kernel-tarball-${{ needs.resolve-version.outputs.kernel_full }}
+
+      # --------------------------------------------------------
+      # Cache ccache - keyed by platform + series
+      # Falls back to any previous cache for this platform
+      # --------------------------------------------------------
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_full }}
+          restore-keys: |
+            ccache-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_series }}.
+            ccache-${{ matrix.platform }}-
+
+      # --------------------------------------------------------
+      # Install build dependencies
+      # --------------------------------------------------------
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential bc bison flex \
+            libssl-dev libelf-dev libncurses-dev \
+            dwarves pahole debhelper rsync \
+            kmod wget curl git xz-utils ccache \
+            zstd
+
+      # --------------------------------------------------------
+      # Platform-specific firmware prerequisites
+      # --------------------------------------------------------
+      - name: Install platform firmware
+        run: |
+          case "${{ matrix.platform }}" in
+            amd-stoneyridge|amd-ryzen-zork|amd-mendocino)
+              # Add non-free-firmware
+              sudo sed -i \
+                's/^Components: main$/Components: main non-free-firmware/' \
+                /etc/apt/sources.list.d/*.sources 2>/dev/null || \
+              sudo sed -i \
+                's/^\(deb .*\) main$/\1 main non-free-firmware/' \
+                /etc/apt/sources.list 2>/dev/null || true
+              sudo apt-get update
+              sudo apt-get install -y firmware-amd-graphics
+              # Decompress stoney firmware blobs if needed
+              for f in /lib/firmware/amdgpu/stoney_*.bin.zst; do
+                [[ -f "${f%.zst}" ]] && continue
+                sudo zstd -d "$f" -o "${f%.zst}" 2>/dev/null || true
+              done
+              ;;
+            intel-*)
+              sudo sed -i \
+                's/^Components: main$/Components: main non-free-firmware/' \
+                /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+              sudo apt-get update
+              sudo apt-get install -y firmware-iwlwifi || true
+              ;;
+          esac
+
+      # --------------------------------------------------------
+      # Download kernel source (uses cache if available)
+      # --------------------------------------------------------
+      - name: Download kernel source
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+        run: |
+          mkdir -p /var/tmp/kernel-tarballs
+          TARBALL="/var/tmp/kernel-tarballs/linux-${KERNEL_FULL}.tar.xz"
+          if [[ ! -f "$TARBALL" ]]; then
+            MAJOR="${KERNEL_FULL%%.*}"
+            echo "Downloading linux-${KERNEL_FULL}.tar.xz..."
+            wget -q -O "$TARBALL" \
+              "https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${KERNEL_FULL}.tar.xz"
+          else
+            echo "Using cached tarball: $TARBALL"
+          fi
+
+          echo "Extracting..."
+          mkdir -p /var/tmp/kernel-build
+          tar -xf "$TARBALL" -C /var/tmp/kernel-build
+          echo "Source ready: /var/tmp/kernel-build/linux-${KERNEL_FULL}"
+
+      # --------------------------------------------------------
+      # Apply patches
+      # --------------------------------------------------------
+      - name: Apply patches
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+        run: |
+          PATCH_DIR="patches/${{ matrix.platform }}"
+          SRCDIR="/var/tmp/kernel-build/linux-${KERNEL_FULL}"
+          cd "$SRCDIR"
+          if [[ -d "${GITHUB_WORKSPACE}/${PATCH_DIR}" ]]; then
+            shopt -s nullglob
+            patches=("${GITHUB_WORKSPACE}/${PATCH_DIR}"/*.patch)
+            if [[ ${#patches[@]} -gt 0 ]]; then
+              echo "Applying ${#patches[@]} patch(es)..."
+              for p in "${patches[@]}"; do
+                echo "  $(basename "$p")"
+                patch -p1 --forward < "$p" || \
+                  echo "WARNING: patch $(basename "$p") did not apply cleanly"
+              done
+            else
+              echo "No .patch files in $PATCH_DIR"
+            fi
+          else
+            echo "No patch directory for ${{ matrix.platform }}"
+          fi
+
+      # --------------------------------------------------------
+      # Merge kernel config (3-layer)
+      # --------------------------------------------------------
+      - name: Merge kernel config
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+        run: |
+          chmod +x scripts/merge_kernel_config.sh
+          sudo scripts/merge_kernel_config.sh \
+            --kernel-src "/var/tmp/kernel-build/linux-${KERNEL_FULL}" \
+            --codename "${{ matrix.codename }}" \
+            --platform "${{ matrix.platform }}" \
+            --base-config defconfig
+
+      # --------------------------------------------------------
+      # Build kernel .deb packages with ccache
+      # --------------------------------------------------------
+      - name: Build kernel
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+          CODENAME: ${{ matrix.codename }}
+        run: |
+          export CCACHE_DIR=~/.ccache
+          ccache -s  # show cache stats before build
+
+          LOCAL_VERSION="-velvet-${CODENAME}"
+          FULL_PKG_VERSION="${KERNEL_FULL}${LOCAL_VERSION}"
+
+          cd "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
+          time make ARCH=x86_64 \
+            CC="ccache gcc" \
+            LOCALVERSION="${LOCAL_VERSION}" \
+            KDEB_PKGVERSION="${FULL_PKG_VERSION}-1" \
+            KDEB_COMPRESS="xz" \
+            INSTALL_MOD_STRIP=1 \
+            bindeb-pkg \
+            -j$(nproc)
+
+          ccache -s  # show cache stats after build
+          echo "FULL_PKG_VERSION=${FULL_PKG_VERSION}" >> "$GITHUB_ENV"
+
+      # --------------------------------------------------------
+      # Generate APT pin file
+      # --------------------------------------------------------
+      - name: Generate APT pin file
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+          CODENAME: ${{ matrix.codename }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          mkdir -p output
+          chmod +x scripts/install_apt_pin.sh
+          scripts/install_apt_pin.sh \
+            --generate \
+            "${KERNEL_FULL}-velvet-${CODENAME}" \
+            "${CODENAME}" \
+            "${PLATFORM}" \
+            "output/99-velvet-kernel-${CODENAME}"
+
+      # --------------------------------------------------------
+      # Collect all output files
+      # --------------------------------------------------------
+      - name: Collect output
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+          CODENAME: ${{ matrix.codename }}
+        run: |
+          mkdir -p output
+          # Copy debs (they land one level above the source dir)
+          find /var/tmp/kernel-build -maxdepth 1 -name "*.deb" \
+            -exec cp {} output/ \;
+          echo "Output files:"
+          ls -lh output/
+
+      # --------------------------------------------------------
+      # Upload as workflow artifact (available immediately)
+      # --------------------------------------------------------
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_full }}
+          path: output/
+          retention-days: 30
+
+  # ============================================================
+  # Create a GitHub Release with all platform artifacts combined
+  # Only runs on scheduled and workflow_dispatch triggers,
+  # not on every push (to avoid spamming releases)
+  # ============================================================
+  release:
+    name: Create release
+    needs: [ resolve-version, build ]
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-files
+          pattern: kernel-*
+          merge-multiple: true
+
+      - name: Show release contents
+        run: ls -lh release-files/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve-version.outputs.kernel_full }}-velvet
+          name: "Velvet Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }}"
+          body: |
+            ## Velvet OS Custom Chromebook Kernels
+
+            Kernel version: **linux-${{ needs.resolve-version.outputs.kernel_full }}**
+            Built: ${{ github.run_id }}
+
+            ### Platforms included
+            | Platform | Representative board | Notes |
+            |---|---|---|
+            | amd-stoneyridge | aleena | AMDGPU=y, firmware built-in |
+            | amd-ryzen-zork | zork | SOF/ACP audio |
+            | amd-mendocino | mendocino | SOF audio |
+            | intel-cometlake | hatch | SOF CML |
+            | intel-tigerlake | volteer | SOF TGL + SoundWire |
+            | intel-alderlake | brya | SOF ADL + SoundWire |
+
+            ### Installation
+            ```bash
+            # Install kernel
+            sudo dpkg -i linux-image-*-velvet-<codename>*.deb \
+                         linux-headers-*-velvet-<codename>*.deb
+
+            # Pin to prevent apt upgrades
+            sudo cp 99-velvet-kernel-<codename> /etc/apt/preferences.d/
+            sudo apt-mark hold linux-image-*-velvet-<codename>
+
+            # Reboot, then set up audio (if needed)
+            git clone https://github.com/WeirdTreeThing/chromebook-linux-audio
+            cd chromebook-linux-audio && sudo ./setup-audio
+            ```
+
+            ### Finding your codename
+            ```bash
+            cat /sys/class/dmi/id/board_name
+            ```
+          files: release-files/*
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
