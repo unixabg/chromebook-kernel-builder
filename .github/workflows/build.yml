@@ -145,32 +145,41 @@ jobs:
 
       # --------------------------------------------------------
       # Platform-specific firmware prerequisites
+      # GitHub runners are Ubuntu - firmware packages have different
+      # names than Debian. linux-firmware covers AMD and Intel blobs.
+      # non-free-firmware is a Debian concept only - not needed on Ubuntu.
       # --------------------------------------------------------
       - name: Install platform firmware
         run: |
           case "${{ matrix.platform }}" in
             amd-stoneyridge|amd-ryzen-zork|amd-mendocino)
-              # Add non-free-firmware
-              sudo sed -i \
-                's/^Components: main$/Components: main non-free-firmware/' \
-                /etc/apt/sources.list.d/*.sources 2>/dev/null || \
-              sudo sed -i \
-                's/^\(deb .*\) main$/\1 main non-free-firmware/' \
-                /etc/apt/sources.list 2>/dev/null || true
-              sudo apt-get update
-              sudo apt-get install -y firmware-amd-graphics
-              # Decompress stoney firmware blobs if needed
+              # Ubuntu: linux-firmware contains amdgpu blobs
+              sudo apt-get install -y linux-firmware
+              # Decompress stoney firmware blobs if present as .zst
               for f in /lib/firmware/amdgpu/stoney_*.bin.zst; do
                 [[ -f "${f%.zst}" ]] && continue
                 sudo zstd -d "$f" -o "${f%.zst}" 2>/dev/null || true
               done
+              # If still missing, download directly from linux-firmware git
+              MISSING=()
+              for blob in ce me mec pfp rlc sdma uvd vce; do
+                [[ ! -f "/lib/firmware/amdgpu/stoney_${blob}.bin" ]] && \
+                  MISSING+=("stoney_${blob}.bin")
+              done
+              if [[ ${#MISSING[@]} -gt 0 ]]; then
+                echo "Downloading missing blobs: ${MISSING[*]}"
+                for blob in "${MISSING[@]}"; do
+                  sudo wget -q \
+                    "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/amdgpu/${blob}" \
+                    -O "/lib/firmware/amdgpu/${blob}"
+                done
+              fi
+              echo "Stoney firmware:"
+              ls /lib/firmware/amdgpu/stoney_*.bin
               ;;
             intel-*)
-              sudo sed -i \
-                's/^Components: main$/Components: main non-free-firmware/' \
-                /etc/apt/sources.list.d/*.sources 2>/dev/null || true
-              sudo apt-get update
-              sudo apt-get install -y firmware-iwlwifi || true
+              # Ubuntu: linux-firmware covers iwlwifi and DSP firmware
+              sudo apt-get install -y linux-firmware
               ;;
           esac
 
