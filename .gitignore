@@ -1,0 +1,15 @@
+# Build output - generated at build time
+output/
+
+# Log files
+*.log
+
+# Kernel build artifacts if someone sets BUILD_DIR inside the repo
+linux-*/
+*.deb
+*.tar.xz
+
+# Editor cruft
+*.swp
+*~
+.DS_Store
