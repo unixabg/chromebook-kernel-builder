@@ -73,7 +73,7 @@ jobs:
   # Build matrix - one job per platform
   # ============================================================
   build:
-    name: Build ${{ matrix.platform }} (${{ matrix.codename }})
+    name: Build ${{ matrix.platform }}
     needs: resolve-version
     runs-on: ubuntu-24.04
 
@@ -82,18 +82,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # CI builds one monolithic kernel per platform.
+          # codename matches platform so no device config is applied -
+          # the platform config covers all boards in that family.
+          # To add a specific device build, add a new matrix entry with
+          # the board codename e.g.:
+          #   - platform: amd-stoneyridge
+          #     codename: treeya
           - platform: amd-stoneyridge
-            codename: aleena
+            codename: amd-stoneyridge
           - platform: amd-ryzen-zork
-            codename: zork
+            codename: amd-ryzen-zork
           - platform: amd-mendocino
-            codename: mendocino
+            codename: amd-mendocino
           - platform: intel-cometlake
-            codename: hatch
+            codename: intel-cometlake
           - platform: intel-tigerlake
-            codename: volteer
+            codename: intel-tigerlake
           - platform: intel-alderlake
-            codename: brya
+            codename: intel-alderlake
+          - platform: intel-braswell
+            codename: intel-braswell
 
     steps:
       - name: Check platform filter
@@ -360,33 +369,41 @@ jobs:
             Built: ${{ github.run_id }}
 
             ### Platforms included
-            | Platform | Representative board | Notes |
+            | Kernel package | Covers | Notes |
             |---|---|---|
-            | amd-stoneyridge | aleena | AMDGPU=y, firmware built-in |
-            | amd-ryzen-zork | zork | SOF/ACP audio |
-            | amd-mendocino | mendocino | SOF audio |
-            | intel-cometlake | hatch | SOF CML |
-            | intel-tigerlake | volteer | SOF TGL + SoundWire |
-            | intel-alderlake | brya | SOF ADL + SoundWire |
+            | linux-image-*-velvet-amd-stoneyridge | GRUNT family (aleena, treeya, barla, etc.) | AMDGPU=y, firmware built-in |
+            | linux-image-*-velvet-amd-ryzen-zork | ZORK family (morphius, dalboz, etc.) | SOF/ACP audio |
+            | linux-image-*-velvet-amd-mendocino | Mendocino family | SOF audio |
+            | linux-image-*-velvet-intel-cometlake | HATCH family (kohaku, helios, etc.) | SOF CML |
+            | linux-image-*-velvet-intel-tigerlake | VOLTEER family (voxel, delbin, etc.) | SOF TGL + SoundWire |
+            | linux-image-*-velvet-intel-alderlake | BRYA family (constitution, vell, etc.) | SOF ADL + SoundWire |
+            | linux-image-*-velvet-intel-braswell | STRAGO family (relm, setzer, gnawty, etc.) | CHT SST audio |
 
             ### Installation
             ```bash
+            # Find your platform from the table above, then:
+            PLATFORM=amd-stoneyridge   # replace with your platform
+
             # Install kernel
-            sudo dpkg -i linux-image-*-velvet-<codename>*.deb \
-                         linux-headers-*-velvet-<codename>*.deb
+            sudo dpkg -i linux-image-*-velvet-${PLATFORM}*.deb \
+                         linux-headers-*-velvet-${PLATFORM}*.deb
 
             # Pin to prevent apt upgrades
-            sudo cp 99-velvet-kernel-<codename> /etc/apt/preferences.d/
-            sudo apt-mark hold linux-image-*-velvet-<codename>
+            sudo cp 99-velvet-kernel-${PLATFORM} /etc/apt/preferences.d/
+            sudo apt-mark hold linux-image-*-velvet-${PLATFORM}
 
-            # Reboot, then set up audio (if needed)
+            # Reboot, then set up audio
             git clone https://github.com/WeirdTreeThing/chromebook-linux-audio
             cd chromebook-linux-audio && sudo ./setup-audio
             ```
 
-            ### Finding your codename
+            ### Finding your platform
             ```bash
+            # Get your board codename
             cat /sys/class/dmi/id/board_name
+
+            # Look it up in hardware_map.conf to find the platform:
+            # https://github.com/unixabg/chromebook-kernel-builder/blob/main/configs/hardware_map.conf
             ```
           files: release-files/*
           make_latest: true
