@@ -209,15 +209,10 @@ else
     log "All dependencies satisfied."
 fi
 
-# Platform-specific build prerequisites check
-# These are not installed automatically - run scripts/setup_build_env.sh first
-if [[ "$PLATFORM" == "amd-stoneyridge" ]]; then
-    if ! ls /lib/firmware/amdgpu/stoney_ce.bin &>/dev/null; then
-        die "Stoneyridge firmware not found at /lib/firmware/amdgpu/stoney_ce.bin
-       Run first: sudo ./scripts/setup_build_env.sh amd-stoneyridge"
-    fi
-    log "Stoneyridge firmware: OK"
-fi
+# No platform-specific firmware prerequisites needed at build time.
+# Stoneyridge: EXTRA_FIRMWARE="" per validated working config - amdgpu
+# firmware loads from the running system's /lib/firmware at runtime.
+# setup_build_env.sh still handles any runtime firmware needed on target.
 
 # ============================================================
 # STEP 4: Fetch kernel source

@@ -78,54 +78,27 @@ ensure_nonfree_firmware() {
 case "$PLATFORM" in
     # -------------------------------------------------------------------------
     amd-stoneyridge)
-        log "AMD Stoneyridge requires firmware blobs compiled into the kernel."
-        log "These must exist as uncompressed .bin files at build time."
+        log "AMD Stoneyridge: firmware loads from filesystem at runtime."
+        log "EXTRA_FIRMWARE is empty per validated working config - no firmware"
+        log "needs to be compiled into the kernel."
+        log ""
+        log "On the TARGET Chromebook, ensure firmware-amd-graphics is installed:"
+        log "  sudo apt-get install firmware-amd-graphics"
+        log "  (requires non-free-firmware in apt sources on Debian)"
+        log "  OR install linux-firmware on Ubuntu/VelvetOS"
 
-        ensure_nonfree_firmware
-        apt-get install -y firmware-amd-graphics zstd
-
-        # Decompress any .zst blobs - kernel EXTRA_FIRMWARE needs plain .bin
-        STONEY_BLOBS=(ce me mec pfp rlc sdma uvd vce)
-        MISSING_FW=()
-        for blob in "${STONEY_BLOBS[@]}"; do
-            bin="/lib/firmware/amdgpu/stoney_${blob}.bin"
-            zst="${bin}.zst"
-            if [[ -f "$bin" ]]; then
-                log "  OK: $bin"
-            elif [[ -f "$zst" ]]; then
-                log "  Decompressing: $zst"
-                zstd -d "$zst" -o "$bin"
-                log "  OK: $bin"
-            else
-                MISSING_FW+=("stoney_${blob}.bin")
+        # Install firmware on this machine if it will also be the target
+        # (i.e. building locally on the Chromebook itself)
+        if [[ -d /sys/class/dmi/id ]]; then
+            BOARD=$(cat /sys/class/dmi/id/board_name 2>/dev/null || true)
+            if [[ -n "$BOARD" ]]; then
+                log "Detected local board: $BOARD - installing runtime firmware..."
+                ensure_nonfree_firmware
+                apt-get install -y firmware-amd-graphics 2>/dev/null || \
+                    apt-get install -y linux-firmware 2>/dev/null || \
+                    warn "Could not install AMD firmware - install manually on target"
             fi
-        done
-
-        if [[ ${#MISSING_FW[@]} -gt 0 ]]; then
-            warn "Still missing after install: ${MISSING_FW[*]}"
-            warn "Trying direct download from linux-firmware git..."
-            for blob in "${MISSING_FW[@]}"; do
-                wget -q "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/amdgpu/${blob}" \
-                     -O "/lib/firmware/amdgpu/${blob}" && \
-                log "  Downloaded: $blob" || \
-                warn "  Failed to download: $blob"
-            done
         fi
-
-        # Final check
-        STILL_MISSING=()
-        for blob in "${STONEY_BLOBS[@]}"; do
-            [[ ! -f "/lib/firmware/amdgpu/stoney_${blob}.bin" ]] && \
-                STILL_MISSING+=("stoney_${blob}.bin")
-        done
-
-        if [[ ${#STILL_MISSING[@]} -gt 0 ]]; then
-            die "Cannot find firmware: ${STILL_MISSING[*]}
-     Audio will not work without these files present at kernel build time."
-        fi
-
-        log "All Stoneyridge firmware blobs present:"
-        ls -lh /lib/firmware/amdgpu/stoney_*.bin
         ;;
 
     # -------------------------------------------------------------------------

@@ -170,6 +170,7 @@ fi
 # Resolve any new/changed symbols to a consistent state
 make ARCH=x86_64 olddefconfig
 
+
 # --- Step 3: Copy to output if different path ---
 if [[ "$OUTPUT_CONFIG" != "${KERNEL_SRC}/.config" ]]; then
     cp "${KERNEL_SRC}/.config" "$OUTPUT_CONFIG"
@@ -187,39 +188,44 @@ verify_config() {
     
     case "$PLATFORM" in
         amd-stoneyridge)
-            # AMDGPU MUST be =y not =m
-            if grep -q "^CONFIG_DRM_AMDGPU=m" "$config_file"; then
-                log "CRITICAL ERROR: CONFIG_DRM_AMDGPU=m detected!"
-                log "  Stoneyridge requires CONFIG_DRM_AMDGPU=y (built-in)"
-                log "  Audio WILL NOT work with AMDGPU as a module."
-                exit 1
-            elif grep -q "^CONFIG_DRM_AMDGPU=y" "$config_file"; then
-                log "  OK: CONFIG_DRM_AMDGPU=y"
+            # AMDGPU: =m is correct per validated 6.19 working config
+            # Firmware is loaded from filesystem at runtime (EXTRA_FIRMWARE="")
+            # Probe ordering is handled by DRM_AMD_ACP=y in the platform config
+            if grep -q "^CONFIG_DRM_AMDGPU=y" "$config_file"; then
+                log "  WARNING: CONFIG_DRM_AMDGPU=y (built-in)"
+                log "  Validated working configs use =m - firmware loads from filesystem"
+            elif grep -q "^CONFIG_DRM_AMDGPU=m" "$config_file"; then
+                log "  OK: CONFIG_DRM_AMDGPU=m"
             else
-                log "  WARNING: CONFIG_DRM_AMDGPU not set - audio will not work"
+                log "  WARNING: CONFIG_DRM_AMDGPU not set"
             fi
-            
-            # DW I2S must be built-in
+
+            # DRM_AMD_ACP must be built-in for audio probe ordering
+            if grep -q "^CONFIG_DRM_AMD_ACP=y" "$config_file"; then
+                log "  OK: CONFIG_DRM_AMD_ACP=y"
+            else
+                log "  WARNING: CONFIG_DRM_AMD_ACP not =y - audio probe ordering may fail"
+            fi
+
+            # DW I2S: =m is correct per validated 6.19 working config
             if grep -q "^CONFIG_SND_DESIGNWARE_I2S=m" "$config_file"; then
-                log "CRITICAL WARNING: CONFIG_SND_DESIGNWARE_I2S=m"
-                log "  Stoneyridge needs this =y for reliable audio probe ordering"
+                log "  OK: CONFIG_SND_DESIGNWARE_I2S=m"
             elif grep -q "^CONFIG_SND_DESIGNWARE_I2S=y" "$config_file"; then
-                log "  OK: CONFIG_SND_DESIGNWARE_I2S=y"
+                log "  WARNING: CONFIG_SND_DESIGNWARE_I2S=y (built-in not needed)"
             fi
-            
-            # Check built-in firmware is set
-            if grep -q "^CONFIG_EXTRA_FIRMWARE=" "$config_file"; then
-                local fw_val
-                fw_val=$(grep "^CONFIG_EXTRA_FIRMWARE=" "$config_file")
-                if echo "$fw_val" | grep -q "stoney_ce.bin"; then
-                    log "  OK: stoney firmware built-in: $fw_val"
-                else
-                    log "  WARNING: CONFIG_EXTRA_FIRMWARE set but stoney_*.bin not found"
-                    log "  Current value: $fw_val"
-                fi
+
+            # ACP3x native driver for Stoneyridge audio
+            if grep -q "^CONFIG_SND_SOC_AMD_ACP3x=m" "$config_file"; then
+                log "  OK: CONFIG_SND_SOC_AMD_ACP3x=m"
             else
-                log "  WARNING: CONFIG_EXTRA_FIRMWARE not set - stoney firmware not built-in"
-                log "  This is required for audio to work on Stoneyridge"
+                log "  WARNING: CONFIG_SND_SOC_AMD_ACP3x not set - Stoneyridge audio may not work"
+            fi
+
+            # AMD pstate for CPU frequency scaling
+            if grep -q "^CONFIG_X86_AMD_PSTATE=y" "$config_file"; then
+                log "  OK: CONFIG_X86_AMD_PSTATE=y"
+            else
+                log "  WARNING: CONFIG_X86_AMD_PSTATE not set - CPU may not scale frequency"
             fi
             ;;
         
