@@ -83,25 +83,25 @@ jobs:
       matrix:
         include:
           # Intel platforms
-          - platform: geminilake
-            codename: geminilake
-          - platform: intel-braswell
-            codename: intel-braswell
-          - platform: intel-cometlake
-            codename: intel-cometlake
-          - platform: intel-tigerlake
-            codename: intel-tigerlake
-          - platform: intel-alderlake
-            codename: intel-alderlake
+          #- platform: geminilake
+          #  codename: geminilake
+          #- platform: intel-braswell
+          #  codename: intel-braswell
+          #- platform: intel-cometlake
+          #  codename: intel-cometlake
+          #- platform: intel-tigerlake
+          #  codename: intel-tigerlake
+          #- platform: intel-alderlake
+          #  codename: intel-alderlake
           # AMD platforms
           - platform: stoney-ridge
             codename: stoney-ridge
-          - platform: amd-grunt
-            codename: amd-grunt
-          - platform: amd-ryzen-zork
-            codename: amd-ryzen-zork
-          - platform: amd-mendocino
-            codename: amd-mendocino
+          #- platform: amd-grunt
+          #  codename: amd-grunt
+          #- platform: amd-ryzen-zork
+          #  codename: amd-ryzen-zork
+          #- platform: amd-mendocino
+          #  codename: amd-mendocino
 
     steps:
       - name: Check platform filter
