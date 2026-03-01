@@ -3,10 +3,13 @@
 # merge_kernel_config.sh
 #
 # Merges kernel config fragments in order:
-#   1. Base arch config (allmodconfig or existing .config from running system)
-#   2. Base chromebook fragment (configs/base/chromebooks-x86_64.cfg)
-#   3. Platform fragment (configs/platform/<platform>.cfg)
-#   4. Device fragment (configs/device/<codename>.cfg) - if exists
+#   1. Base arch defconfig
+#   2. features/remove-generic.cfg  - strip defconfig bloat
+#   3. base/chromebooks-x86_64.cfg  - ChromeOS EC, audio, platform base
+#   4. platform/<platform>.cfg      - SoC-specific: GPU, audio path, WiFi
+#   5. device/<codename>.cfg        - per-board overrides (optional)
+#   6. features/generic.cfg         - filesystems, networking, crypto,
+#                                     initrd compression, wifi drivers
 #
 # Each fragment is a PARTIAL config: only the options you want to set/override.
 # Options not mentioned in a fragment are left as-is from previous layers.
@@ -14,10 +17,10 @@
 #
 # Usage:
 #   ./merge_kernel_config.sh \
-#       --kernel-src /path/to/linux-6.6.x \
-#       --codename aleena \
-#       --platform amd-stoneyridge \
-#       --base-config [defconfig|/boot/config-$(uname -r)|none] \
+#       --kernel-src /path/to/linux-6.12.x \
+#       --codename treeya \
+#       --platform stoney-ridge \
+#       --base-config defconfig \
 #       --output /path/to/output/.config
 # =============================================================================
 
@@ -40,7 +43,7 @@ while [[ $# -gt 0 ]]; do
         --platform)     PLATFORM="$2";      shift 2 ;;
         --base-config)  BASE_CONFIG="$2";   shift 2 ;;
         --output)       OUTPUT_CONFIG="$2"; shift 2 ;;
-        *) echo "Unknown: $1"; exit 1 ;;
+        *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
 
@@ -51,18 +54,35 @@ done
 
 log() { echo "[merge_config] $*"; }
 
-# USE_KMERGE is determined after defconfig runs (kmerge script only exists post-build-prep)
 KMERGE="${KERNEL_SRC}/scripts/kconfig/merge_config.sh"
-USE_KMERGE=false  # resolved below after defconfig
 
-# --- Collect fragments in order ---
+# =============================================================================
+# Collect fragments in layer order
+# =============================================================================
 FRAGMENTS=()
 
+# Layer 1: Remove generic defconfig bloat
+# Must come before base so removals take effect before additions
+REMOVE_FRAG="${REPO_DIR}/configs/features/remove-generic.cfg"
+if [[ -f "$REMOVE_FRAG" ]]; then
+    FRAGMENTS+=("$REMOVE_FRAG")
+    log "Remove fragment: $REMOVE_FRAG"
+else
+    log "WARNING: remove-generic.cfg not found at $REMOVE_FRAG"
+fi
+
 # Layer 2: Base chromebook options
+# ChromeOS EC, IIO sensors, I2C, MMC, TPM, camera, full Intel SOF audio stack
 BASE_FRAG="${REPO_DIR}/configs/base/chromebooks-x86_64.cfg"
-[[ -f "$BASE_FRAG" ]] && FRAGMENTS+=("$BASE_FRAG") || log "WARNING: base fragment not found: $BASE_FRAG"
+if [[ -f "$BASE_FRAG" ]]; then
+    FRAGMENTS+=("$BASE_FRAG")
+    log "Base fragment: $BASE_FRAG"
+else
+    log "WARNING: base fragment not found at $BASE_FRAG"
+fi
 
 # Layer 3: Platform fragment
+# SoC-specific: GPU driver, CPU frequency driver, platform audio path, WiFi
 PLATFORM_FRAG="${REPO_DIR}/configs/platform/${PLATFORM}.cfg"
 if [[ -f "$PLATFORM_FRAG" ]]; then
     FRAGMENTS+=("$PLATFORM_FRAG")
@@ -80,12 +100,26 @@ else
     log "INFO: no device-specific fragment for '$CODENAME' (using platform defaults)"
 fi
 
+# Layer 5: Generic feature additions
+# Filesystems, networking, crypto, initrd compression formats, broad wifi
+# driver coverage, Android/Waydroid, security, monitoring.
+# Applied LAST so these additions survive any platform overrides.
+GENERIC_FRAG="${REPO_DIR}/configs/features/generic.cfg"
+if [[ -f "$GENERIC_FRAG" ]]; then
+    FRAGMENTS+=("$GENERIC_FRAG")
+    log "Generic features fragment: $GENERIC_FRAG"
+else
+    log "WARNING: generic.cfg not found at $GENERIC_FRAG"
+fi
+
 log "Fragment merge order:"
 for f in "${FRAGMENTS[@]}"; do
     log "  $f"
 done
 
-# --- Step 1: Establish base .config ---
+# =============================================================================
+# Step 1: Establish base .config
+# =============================================================================
 cd "$KERNEL_SRC"
 
 case "$BASE_CONFIG" in
@@ -113,24 +147,16 @@ case "$BASE_CONFIG" in
         ;;
 esac
 
-# --- Step 2: Apply fragments ---
-# Check for kmerge NOW (after defconfig has run and kernel scripts are built)
+# =============================================================================
+# Step 2: Apply fragments
+# =============================================================================
 if [[ -x "$KMERGE" ]]; then
-    USE_KMERGE=true
     log "Using kernel merge_config.sh..."
-else
-    USE_KMERGE=false
-    log "merge_config.sh not found, using scripts/config fallback..."
-fi
-
-if [[ "$USE_KMERGE" == true ]]; then
-    # Use kernel's merge_config.sh - handles fragment merging properly
-    # -m = merge into existing .config  -r = allow override warnings
     "${KMERGE}" -m -r .config "${FRAGMENTS[@]}"
-    # merge_config.sh writes to .config.new in some versions
+    # merge_config.sh writes to .config.new in some kernel versions
     [[ -f ".config.new" ]] && mv .config.new .config
 else
-    # Fallback: apply each fragment line by line using scripts/config
+    log "merge_config.sh not found, using scripts/config fallback..."
     SCRIPTS_CONFIG="${KERNEL_SRC}/scripts/config"
     for frag in "${FRAGMENTS[@]}"; do
         log "  Applying: $(basename "$frag")"
@@ -157,7 +183,7 @@ else
                 key="${BASH_REMATCH[1]#CONFIG_}"
                 val="${BASH_REMATCH[2]}"
                 "$SCRIPTS_CONFIG" --set-str "$key" "$val"
-            # CONFIG_FOO=some_value (unquoted, e.g. numeric)
+            # CONFIG_FOO=value (unquoted numeric etc.)
             elif [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=(.+)$ ]]; then
                 key="${BASH_REMATCH[1]#CONFIG_}"
                 val="${BASH_REMATCH[2]}"
@@ -170,8 +196,9 @@ fi
 # Resolve any new/changed symbols to a consistent state
 make ARCH=x86_64 olddefconfig
 
-
-# --- Step 3: Copy to output if different path ---
+# =============================================================================
+# Step 3: Copy to output if a different path was requested
+# =============================================================================
 if [[ "$OUTPUT_CONFIG" != "${KERNEL_SRC}/.config" ]]; then
     cp "${KERNEL_SRC}/.config" "$OUTPUT_CONFIG"
 fi
@@ -181,79 +208,139 @@ log "=== Config merge complete ==="
 log "Output: $OUTPUT_CONFIG"
 log ""
 
-# --- Step 4: Verify critical options for the platform ---
+# =============================================================================
+# Step 4: Verify critical options per platform
+# =============================================================================
 verify_config() {
     local config_file="${KERNEL_SRC}/.config"
     log "=== Verifying critical config options for platform: $PLATFORM ==="
-    
+
+    # Helper: check a config option and log OK or WARNING
+    check_y() {
+        local key="$1" msg="$2"
+        if grep -q "^${key}=y" "$config_file"; then
+            log "  OK: ${key}=y"
+        else
+            log "  WARNING: ${key} not =y - ${msg}"
+        fi
+    }
+    check_ym() {
+        local key="$1" msg="$2"
+        if grep -qE "^${key}=[ym]" "$config_file"; then
+            log "  OK: ${key} enabled"
+        else
+            log "  WARNING: ${key} not set - ${msg}"
+        fi
+    }
+    check_not_set() {
+        local key="$1" msg="$2"
+        if grep -q "^# ${key} is not set" "$config_file"; then
+            log "  OK: ${key} disabled"
+        else
+            log "  WARNING: ${key} not disabled - ${msg}"
+        fi
+    }
+
+    # ── Universal checks (all platforms) ─────────────────────────────────────
+    check_y  "CONFIG_USER_NS"      "systemd services (upower, colord) will fail"
+    check_y  "CONFIG_BTRFS_FS"     "btrfs root filesystem not supported"
+    check_y  "CONFIG_RD_ZSTD"      "zstd initrd will not decompress - system will hang at boot"
+    check_y  "CONFIG_RD_LZ4"       "lz4 initrd will not decompress"
+    check_y  "CONFIG_RD_GZIP"      "gzip initrd will not decompress"
+    check_y  "CONFIG_SECURITY_APPARMOR" "AppArmor not available"
+    check_ym "CONFIG_CROS_EC"      "ChromeOS EC not available - keyboard/touchpad may fail"
+    check_y  "CONFIG_MMC_SDHCI_ACPI" "eMMC may not be detected"
+
+    # ── Platform-specific checks ──────────────────────────────────────────────
     case "$PLATFORM" in
-        amd-stoneyridge)
-            # AMDGPU: =m is correct per validated 6.19 working config
-            # Firmware is loaded from filesystem at runtime (EXTRA_FIRMWARE="")
-            # Probe ordering is handled by DRM_AMD_ACP=y in the platform config
+
+        stoney-ridge)
+            log "  -- stoney-ridge checks --"
+            # amdgpu MUST be built-in or display goes black at boot
             if grep -q "^CONFIG_DRM_AMDGPU=y" "$config_file"; then
-                log "  WARNING: CONFIG_DRM_AMDGPU=y (built-in)"
-                log "  Validated working configs use =m - firmware loads from filesystem"
+                log "  OK: CONFIG_DRM_AMDGPU=y (built-in required for display)"
             elif grep -q "^CONFIG_DRM_AMDGPU=m" "$config_file"; then
-                log "  OK: CONFIG_DRM_AMDGPU=m"
+                log "  WARNING: CONFIG_DRM_AMDGPU=m - display will go black at boot, must be =y"
             else
-                log "  WARNING: CONFIG_DRM_AMDGPU not set"
+                log "  WARNING: CONFIG_DRM_AMDGPU not set - no display"
             fi
-
-            # DRM_AMD_ACP must be built-in for audio probe ordering
-            if grep -q "^CONFIG_DRM_AMD_ACP=y" "$config_file"; then
-                log "  OK: CONFIG_DRM_AMD_ACP=y"
+            # Firmware must be embedded
+            if grep -q "^CONFIG_EXTRA_FIRMWARE=" "$config_file"; then
+                log "  OK: CONFIG_EXTRA_FIRMWARE set (stoney blobs embedded)"
             else
-                log "  WARNING: CONFIG_DRM_AMD_ACP not =y - audio probe ordering may fail"
+                log "  WARNING: CONFIG_EXTRA_FIRMWARE not set - stoney firmware not embedded"
             fi
-
-            # DW I2S: =m is correct per validated 6.19 working config
-            if grep -q "^CONFIG_SND_DESIGNWARE_I2S=m" "$config_file"; then
-                log "  OK: CONFIG_SND_DESIGNWARE_I2S=m"
-            elif grep -q "^CONFIG_SND_DESIGNWARE_I2S=y" "$config_file"; then
-                log "  WARNING: CONFIG_SND_DESIGNWARE_I2S=y (built-in not needed)"
-            fi
-
-            # ACP3x native driver for Stoneyridge audio
-            if grep -q "^CONFIG_SND_SOC_AMD_ACP3x=m" "$config_file"; then
-                log "  OK: CONFIG_SND_SOC_AMD_ACP3x=m"
-            else
-                log "  WARNING: CONFIG_SND_SOC_AMD_ACP3x not set - Stoneyridge audio may not work"
-            fi
-
-            # AMD pstate for CPU frequency scaling
-            if grep -q "^CONFIG_X86_AMD_PSTATE=y" "$config_file"; then
-                log "  OK: CONFIG_X86_AMD_PSTATE=y"
-            else
-                log "  WARNING: CONFIG_X86_AMD_PSTATE not set - CPU may not scale frequency"
-            fi
+            check_y  "CONFIG_DRM_AMD_ACP"           "audio probe ordering will fail"
+            check_y  "CONFIG_SND_DESIGNWARE_I2S"    "audio probe ordering will fail"
+            check_ym "CONFIG_SND_SOC_AMD_ACP3x"     "Stoney Ridge audio not available"
+            check_ym "CONFIG_ATH10K_PCI"             "WiFi (QCA6174) not available"
+            check_not_set "CONFIG_X86_INTEL_PSTATE"  "Intel pstate should not load on AMD"
+            check_y  "CONFIG_X86_ACPI_CPUFREQ"      "CPU frequency scaling not available"
             ;;
-        
+
+        amd-grunt)
+            log "  -- amd-grunt checks --"
+            check_ym "CONFIG_DRM_AMDGPU"            "no display"
+            check_ym "CONFIG_SND_SOC_AMD_ACP3x"     "GRUNT audio not available"
+            check_ym "CONFIG_SND_SOC_AMD_CZ_DA7219MX98357_MACH" "GRUNT machine driver missing"
+            check_y  "CONFIG_AMD_IOMMU"              "AMD IOMMU not available"
+            ;;
+
         amd-ryzen-zork)
-            if grep -q "^CONFIG_SND_SOC_SOF_AMD_RENOIR" "$config_file"; then
-                log "  OK: SOF AMD Renoir present"
-            else
-                log "  WARNING: CONFIG_SND_SOC_SOF_AMD_RENOIR not found"
-            fi
+            log "  -- amd-ryzen-zork checks --"
+            check_ym "CONFIG_DRM_AMDGPU"            "no display"
+            check_ym "CONFIG_SND_SOC_SOF_AMD_RENOIR" "ZORK SOF audio not available"
+            check_ym "CONFIG_SND_SOC_AMD_RENOIR"     "ZORK ACP audio not available"
+            check_y  "CONFIG_X86_AMD_PSTATE"         "CPU frequency scaling not available"
             ;;
-        
-        intel-*)
-            local sof_key=""
-            case "$PLATFORM" in
-                intel-cometlake) sof_key="CONFIG_SND_SOC_SOF_COMETLAKE" ;;
-                intel-tigerlake) sof_key="CONFIG_SND_SOC_SOF_TIGERLAKE" ;;
-                intel-alderlake) sof_key="CONFIG_SND_SOC_SOF_ALDERLAKE" ;;
-            esac
-            if [[ -n "$sof_key" ]]; then
-                if grep -q "^${sof_key}=" "$config_file"; then
-                    log "  OK: ${sof_key} present"
-                else
-                    log "  WARNING: ${sof_key} not found - audio may not work"
-                fi
-            fi
+
+        amd-mendocino)
+            log "  -- amd-mendocino checks --"
+            check_ym "CONFIG_DRM_AMDGPU"            "no display"
+            check_ym "CONFIG_SND_SOC_SOF_AMD_COMMON" "Mendocino SOF audio not available"
+            ;;
+
+        geminilake)
+            log "  -- geminilake checks --"
+            check_ym "CONFIG_DRM_I915"              "no display"
+            check_y  "CONFIG_SND_SOC_SOF_GEMINILAKE_SUPPORT" "GeminiLake SOF audio not available"
+            check_y  "CONFIG_X86_INTEL_PSTATE"      "CPU frequency scaling not available"
+            check_ym "CONFIG_IWLWIFI"               "Intel WiFi not available"
+            ;;
+
+        intel-braswell)
+            log "  -- intel-braswell checks --"
+            check_ym "CONFIG_DRM_I915"              "no display"
+            check_y  "CONFIG_SND_SOC_SOF_BAYTRAIL_SUPPORT" "Braswell/CHT SOF audio not available"
+            check_y  "CONFIG_X86_INTEL_PSTATE"      "CPU frequency scaling not available"
+            check_ym "CONFIG_IWLWIFI"               "Intel WiFi not available"
+            ;;
+
+        intel-cometlake)
+            log "  -- intel-cometlake checks --"
+            check_ym "CONFIG_DRM_I915"              "no display"
+            check_y  "CONFIG_SND_SOC_SOF_COMETLAKE_LP_SUPPORT" "CometLake SOF audio not available"
+            check_y  "CONFIG_X86_INTEL_PSTATE"      "CPU frequency scaling not available"
+            ;;
+
+        intel-tigerlake)
+            log "  -- intel-tigerlake checks --"
+            check_ym "CONFIG_DRM_I915"              "no display"
+            check_y  "CONFIG_SND_SOC_SOF_TIGERLAKE_SUPPORT" "TigerLake SOF audio not available"
+            check_y  "CONFIG_X86_INTEL_PSTATE"      "CPU frequency scaling not available"
+            ;;
+
+        intel-alderlake)
+            log "  -- intel-alderlake checks --"
+            check_ym "CONFIG_DRM_I915"              "no display"
+            check_y  "CONFIG_X86_INTEL_PSTATE"      "CPU frequency scaling not available"
+            ;;
+
+        *)
+            log "  INFO: no specific checks defined for platform '$PLATFORM'"
             ;;
     esac
-    
+
     log "=== Verification complete ==="
 }
 
