@@ -22,7 +22,7 @@ on:
         required: false
         default: ''
       platform_filter:
-        description: 'Build only this platform (e.g. amd-stoneyridge), leave blank for all'
+        description: 'Build only this platform (e.g. geminilake), leave blank for all'
         required: false
         default: ''
 
@@ -82,27 +82,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # CI builds one monolithic kernel per platform.
-          # codename matches platform so no device config is applied -
-          # the platform config covers all boards in that family.
-          # To add a specific device build, add a new matrix entry with
-          # the board codename e.g.:
-          #   - platform: amd-stoneyridge
-          #     codename: treeya
-          - platform: amd-stoneyridge
-            codename: amd-stoneyridge
-          - platform: amd-ryzen-zork
-            codename: amd-ryzen-zork
-          - platform: amd-mendocino
-            codename: amd-mendocino
+          # Intel platforms
+          - platform: geminilake
+            codename: geminilake
+          - platform: intel-braswell
+            codename: intel-braswell
           - platform: intel-cometlake
             codename: intel-cometlake
           - platform: intel-tigerlake
             codename: intel-tigerlake
           - platform: intel-alderlake
             codename: intel-alderlake
-          - platform: intel-braswell
-            codename: intel-braswell
+          # AMD platforms
+          - platform: stoney-ridge
+            codename: stoney-ridge
+          - platform: amd-grunt
+            codename: amd-grunt
+          - platform: amd-ryzen-zork
+            codename: amd-ryzen-zork
+          - platform: amd-mendocino
+            codename: amd-mendocino
 
     steps:
       - name: Check platform filter
@@ -154,14 +153,11 @@ jobs:
 
       # --------------------------------------------------------
       # Platform-specific firmware prerequisites
-      # GitHub runners are Ubuntu - firmware packages have different
-      # names than Debian. linux-firmware covers AMD and Intel blobs.
-      # non-free-firmware is a Debian concept only - not needed on Ubuntu.
       # --------------------------------------------------------
       - name: Install platform firmware
         run: |
           case "${{ matrix.platform }}" in
-            amd-stoneyridge|amd-ryzen-zork|amd-mendocino)
+            stoney-ridge|amd-grunt|amd-ryzen-zork|amd-mendocino)
               # Ubuntu: linux-firmware contains amdgpu blobs
               sudo apt-get install -y linux-firmware
               # Decompress stoney firmware blobs if present as .zst
@@ -183,11 +179,11 @@ jobs:
                     -O "/lib/firmware/amdgpu/${blob}"
                 done
               fi
-              echo "Stoney firmware:"
-              ls /lib/firmware/amdgpu/stoney_*.bin
+              echo "Stoney firmware present:"
+              ls /lib/firmware/amdgpu/stoney_*.bin 2>/dev/null || echo "  (none - stoney-only check skipped for non-stoney AMD)"
               ;;
-            intel-*)
-              # Ubuntu: linux-firmware covers iwlwifi and DSP firmware
+            geminilake|intel-*)
+              # Ubuntu: linux-firmware covers iwlwifi and SOF DSP firmware
               sudo apt-get install -y linux-firmware
               ;;
           esac
@@ -222,7 +218,6 @@ jobs:
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
-          # Fix ownership after extraction (tar may create root-owned files)
           sudo chown -R "$USER:$USER" "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           PATCH_DIR="patches/${{ matrix.platform }}"
           SRCDIR="/var/tmp/kernel-build/linux-${KERNEL_FULL}"
@@ -245,15 +240,12 @@ jobs:
           fi
 
       # --------------------------------------------------------
-      # Merge kernel config (3-layer)
-      # Run as current user (not sudo) so the build step can
-      # write to the same files without permission errors
+      # Merge kernel config
       # --------------------------------------------------------
       - name: Merge kernel config
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
-          # Ensure build dir is owned by current user
           sudo chown -R "$USER:$USER" "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           chmod +x scripts/merge_kernel_config.sh
           scripts/merge_kernel_config.sh \
@@ -271,7 +263,7 @@ jobs:
           CODENAME: ${{ matrix.codename }}
         run: |
           export CCACHE_DIR=~/.ccache
-          ccache -s  # show cache stats before build
+          ccache -s
 
           LOCAL_VERSION="-velvet-${CODENAME}"
           FULL_PKG_VERSION="${KERNEL_FULL}${LOCAL_VERSION}"
@@ -286,7 +278,7 @@ jobs:
             bindeb-pkg \
             -j$(nproc)
 
-          ccache -s  # show cache stats after build
+          ccache -s
           echo "FULL_PKG_VERSION=${FULL_PKG_VERSION}" >> "$GITHUB_ENV"
 
       # --------------------------------------------------------
@@ -308,7 +300,7 @@ jobs:
             "output/99-velvet-kernel-${CODENAME}"
 
       # --------------------------------------------------------
-      # Collect all output files
+      # Collect output files
       # --------------------------------------------------------
       - name: Collect output
         env:
@@ -316,14 +308,13 @@ jobs:
           CODENAME: ${{ matrix.codename }}
         run: |
           mkdir -p output
-          # Copy debs (they land one level above the source dir)
           find /var/tmp/kernel-build -maxdepth 1 -name "*.deb" \
             -exec cp {} output/ \;
           echo "Output files:"
           ls -lh output/
 
       # --------------------------------------------------------
-      # Upload as workflow artifact (available immediately)
+      # Upload as workflow artifact
       # --------------------------------------------------------
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -334,8 +325,7 @@ jobs:
 
   # ============================================================
   # Create a GitHub Release with all platform artifacts combined
-  # Only runs on scheduled and workflow_dispatch triggers,
-  # not on every push (to avoid spamming releases)
+  # Only runs on scheduled and workflow_dispatch triggers
   # ============================================================
   release:
     name: Create release
@@ -369,42 +359,44 @@ jobs:
             Built: ${{ github.run_id }}
 
             ### Platforms included
-            | Kernel package | Covers | Notes |
-            |---|---|---|
-            | linux-image-*-velvet-amd-stoneyridge | GRUNT family (aleena, treeya, barla, etc.) | AMDGPU=y, firmware built-in |
-            | linux-image-*-velvet-amd-ryzen-zork | ZORK family (morphius, dalboz, etc.) | SOF/ACP audio |
-            | linux-image-*-velvet-amd-mendocino | Mendocino family | SOF audio |
-            | linux-image-*-velvet-intel-cometlake | HATCH family (kohaku, helios, etc.) | SOF CML |
-            | linux-image-*-velvet-intel-tigerlake | VOLTEER family (voxel, delbin, etc.) | SOF TGL + SoundWire |
-            | linux-image-*-velvet-intel-alderlake | BRYA family (constitution, vell, etc.) | SOF ADL + SoundWire |
-            | linux-image-*-velvet-intel-braswell | STRAGO family (relm, setzer, gnawty, etc.) | CHT SST audio |
+            | Kernel package | Board family | Devices | Notes |
+            |---|---|---|---|
+            | linux-image-*-velvet-geminilake | PHASER360 | Lenovo 500e Gen2, C340, Flex 3, NEC Y1 | Intel SOF audio |
+            | linux-image-*-velvet-intel-braswell | STRAGO | Gnawty, Relm, Setzer, etc. | CHT SST audio |
+            | linux-image-*-velvet-intel-cometlake | HATCH | Kohaku, Helios, etc. | SOF CML |
+            | linux-image-*-velvet-intel-tigerlake | VOLTEER | Voxel, Delbin, etc. | SOF TGL + SoundWire |
+            | linux-image-*-velvet-intel-alderlake | BRYA | Constitution, Vell, etc. | SOF ADL + SoundWire |
+            | linux-image-*-velvet-stoney-ridge | TREEYA360 | Lenovo 300e Gen2 AMD | ACP audio, needs chromebook-linux-audio |
+            | linux-image-*-velvet-amd-grunt | GRUNT | Aleena, Barla, Careena, etc. | ACP audio |
+            | linux-image-*-velvet-amd-ryzen-zork | ZORK | Morphius, Dalboz, Vilboz, etc. | SOF/ACP audio |
+            | linux-image-*-velvet-amd-mendocino | SKYRIM | Mordin, Grunt2, etc. | SOF audio |
 
             ### Installation
             ```bash
-            # Find your platform from the table above, then:
-            PLATFORM=amd-stoneyridge   # replace with your platform
+            # Find your board codename
+            cat /sys/class/dmi/id/board_name
 
-            # Install kernel
+            # Look up your platform in hardware_map.conf:
+            # https://github.com/unixabg/chromebook-kernel-builder/blob/main/configs/hardware_map.conf
+
+            # Install kernel (replace PLATFORM with your platform name)
+            PLATFORM=geminilake
             sudo dpkg -i linux-image-*-velvet-${PLATFORM}*.deb \
                          linux-headers-*-velvet-${PLATFORM}*.deb
 
-            # Pin to prevent apt upgrades
+            # Pin to prevent apt upgrades overwriting this kernel
             sudo cp 99-velvet-kernel-${PLATFORM} /etc/apt/preferences.d/
             sudo apt-mark hold linux-image-*-velvet-${PLATFORM}
 
-            # Reboot, then set up audio
+            # Reboot, then set up audio if needed
             git clone https://github.com/WeirdTreeThing/chromebook-linux-audio
             cd chromebook-linux-audio && sudo ./setup-audio
             ```
 
-            ### Finding your platform
-            ```bash
-            # Get your board codename
-            cat /sys/class/dmi/id/board_name
-
-            # Look it up in hardware_map.conf to find the platform:
-            # https://github.com/unixabg/chromebook-kernel-builder/blob/main/configs/hardware_map.conf
-            ```
+            ### Audio notes
+            - **stoney-ridge**: Requires `chromebook-linux-audio` for UCM/topology files.
+              On kernel < 6.19 an additional patch is needed - see `patches/stoney-ridge/`.
+            - All other platforms: audio should work out of the box after `setup-audio`.
           files: release-files/*
           make_latest: true
         env:
