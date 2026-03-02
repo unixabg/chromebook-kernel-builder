@@ -276,7 +276,6 @@ verify_config() {
             check_ym "CONFIG_ATH10K_PCI"             "WiFi (QCA6174) not available"
             check_not_set "CONFIG_X86_INTEL_PSTATE"  "Intel pstate should not load on AMD"
             check_y  "CONFIG_X86_ACPI_CPUFREQ"      "CPU frequency scaling not available"
-            grep "SND_DESIGNWARE" "$config_file" | while read line; do log "  DEBUG: $line"; done
             ;;
 
         amd-grunt)
