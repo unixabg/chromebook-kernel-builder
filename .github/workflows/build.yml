@@ -251,7 +251,7 @@ jobs:
           chmod +x scripts/merge_kernel_config.sh
           BASE_CFG="defconfig"
           if [[ "${{ matrix.platform }}" == "stoney-ridge" ]]; then
-            BASE_CFG="${GITHUB_WORKSPACE}/configs/base/6.19rc.cfg"
+            BASE_CFG="${GITHUB_WORKSPACE}/configs/base/6.19.0-rc1.cfg"
           fi
           scripts/merge_kernel_config.sh \
             --kernel-src "/var/tmp/kernel-build/linux-${KERNEL_FULL}" \
