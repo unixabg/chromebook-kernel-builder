@@ -2,7 +2,7 @@
 # =============================================================================
 # install_apt_pin.sh
 #
-# Pins the custom velvet kernel to prevent apt from:
+# Pins the custom chromebook kernel to prevent apt from:
 #   - Upgrading it to a newer version
 #   - Replacing it with a generic distro kernel
 #   - Auto-installing new kernel meta-packages that would pull in stock kernels
@@ -38,7 +38,7 @@ if [[ "$GENERATE_ONLY" == true && -z "$OUTPUT_PATH" ]]; then
     exit 1
 fi
 
-PIN_FILE="${OUTPUT_PATH:-/etc/apt/preferences.d/99-velvet-kernel-${CODENAME}}"
+PIN_FILE="${OUTPUT_PATH:-/etc/apt/preferences.d/99-chromebook-kernel-${CODENAME}}"
 
 log() { echo "[apt-pin] $*"; }
 
@@ -48,7 +48,7 @@ HEADERS_PKG="linux-headers-${FULL_VERSION}"
 
 cat > "$PIN_FILE" << EOF
 # =============================================================================
-# Velvet OS custom kernel APT pin
+# Chromebook custom kernel APT pin
 # Codename  : ${CODENAME}
 # Platform  : ${PLATFORM}
 # Version   : ${FULL_VERSION}

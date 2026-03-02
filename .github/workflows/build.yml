@@ -270,7 +270,7 @@ jobs:
           export CCACHE_DIR=~/.ccache
           ccache -s
 
-          LOCAL_VERSION="-velvet-${CODENAME}"
+          LOCAL_VERSION="-chromebook-${CODENAME}"
           FULL_PKG_VERSION="${KERNEL_FULL}${LOCAL_VERSION}"
 
           cd "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
@@ -299,10 +299,10 @@ jobs:
           chmod +x scripts/install_apt_pin.sh
           scripts/install_apt_pin.sh \
             --generate \
-            "${KERNEL_FULL}-velvet-${CODENAME}" \
+            "${KERNEL_FULL}-chromebook-${CODENAME}" \
             "${CODENAME}" \
             "${PLATFORM}" \
-            "output/99-velvet-kernel-${CODENAME}"
+            "output/99-chromebook-kernel-${CODENAME}"
 
       # --------------------------------------------------------
       # Collect output files
@@ -355,10 +355,10 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.resolve-version.outputs.kernel_full }}-velvet
-          name: "Velvet Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }}"
+          tag_name: ${{ needs.resolve-version.outputs.kernel_full }}-chromebook
+          name: "Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }}"
           body: |
-            ## Velvet OS Custom Chromebook Kernels
+            ## Chromebook OS Custom Chromebook Kernels
 
             Kernel version: **linux-${{ needs.resolve-version.outputs.kernel_full }}**
             Built: ${{ github.run_id }}
@@ -366,15 +366,15 @@ jobs:
             ### Platforms included
             | Kernel package | Board family | Devices | Notes |
             |---|---|---|---|
-            | linux-image-*-velvet-geminilake | PHASER360 | Lenovo 500e Gen2, C340, Flex 3, NEC Y1 | Intel SOF audio |
-            | linux-image-*-velvet-intel-braswell | STRAGO | Gnawty, Relm, Setzer, etc. | CHT SST audio |
-            | linux-image-*-velvet-intel-cometlake | HATCH | Kohaku, Helios, etc. | SOF CML |
-            | linux-image-*-velvet-intel-tigerlake | VOLTEER | Voxel, Delbin, etc. | SOF TGL + SoundWire |
-            | linux-image-*-velvet-intel-alderlake | BRYA | Constitution, Vell, etc. | SOF ADL + SoundWire |
-            | linux-image-*-velvet-stoney-ridge | TREEYA360 | Lenovo 300e Gen2 AMD | ACP audio, needs chromebook-linux-audio |
-            | linux-image-*-velvet-amd-grunt | GRUNT | Aleena, Barla, Careena, etc. | ACP audio |
-            | linux-image-*-velvet-amd-ryzen-zork | ZORK | Morphius, Dalboz, Vilboz, etc. | SOF/ACP audio |
-            | linux-image-*-velvet-amd-mendocino | SKYRIM | Mordin, Grunt2, etc. | SOF audio |
+            | linux-image-*-chromebook-geminilake | PHASER360 | Lenovo 500e Gen2, C340, Flex 3, NEC Y1 | Intel SOF audio |
+            | linux-image-*-chromebook-intel-braswell | STRAGO | Gnawty, Relm, Setzer, etc. | CHT SST audio |
+            | linux-image-*-chromebook-intel-cometlake | HATCH | Kohaku, Helios, etc. | SOF CML |
+            | linux-image-*-chromebook-intel-tigerlake | VOLTEER | Voxel, Delbin, etc. | SOF TGL + SoundWire |
+            | linux-image-*-chromebook-intel-alderlake | BRYA | Constitution, Vell, etc. | SOF ADL + SoundWire |
+            | linux-image-*-chromebook-stoney-ridge | TREEYA360 | Lenovo 300e Gen2 AMD | ACP audio, needs chromebook-linux-audio |
+            | linux-image-*-chromebook-amd-grunt | GRUNT | Aleena, Barla, Careena, etc. | ACP audio |
+            | linux-image-*-chromebook-amd-ryzen-zork | ZORK | Morphius, Dalboz, Vilboz, etc. | SOF/ACP audio |
+            | linux-image-*-chromebook-amd-mendocino | SKYRIM | Mordin, Grunt2, etc. | SOF audio |
 
             ### Installation
             ```bash
@@ -386,12 +386,12 @@ jobs:
 
             # Install kernel (replace PLATFORM with your platform name)
             PLATFORM=geminilake
-            sudo dpkg -i linux-image-*-velvet-${PLATFORM}*.deb \
-                         linux-headers-*-velvet-${PLATFORM}*.deb
+            sudo dpkg -i linux-image-*-chromebook-${PLATFORM}*.deb \
+                         linux-headers-*-chromebook-${PLATFORM}*.deb
 
             # Pin to prevent apt upgrades overwriting this kernel
-            sudo cp 99-velvet-kernel-${PLATFORM} /etc/apt/preferences.d/
-            sudo apt-mark hold linux-image-*-velvet-${PLATFORM}
+            sudo cp 99-chromebook-kernel-${PLATFORM} /etc/apt/preferences.d/
+            sudo apt-mark hold linux-image-*-chromebook-${PLATFORM}
 
             # Reboot, then set up audio if needed
             git clone https://github.com/WeirdTreeThing/chromebook-linux-audio
