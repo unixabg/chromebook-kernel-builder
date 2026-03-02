@@ -1,8 +1,11 @@
 # Chromebook Custom Kernel Builder
 
 A layered, per-device kernel build system for x86_64 Chromebooks running
-[VelvetOS](https://github.com/velvet-os/imagebuilder), designed to work
-alongside [WeirdTreeThing/chromebook-linux-audio](https://github.com/WeirdTreeThing/chromebook-linux-audio).
+any Debian-based Linux distribution.
+
+Designed to work alongside
+[WeirdTreeThing/chromebook-linux-audio](https://github.com/WeirdTreeThing/chromebook-linux-audio)
+for boards that need UCM/topology files installed after boot.
 
 ---
 
@@ -10,49 +13,65 @@ alongside [WeirdTreeThing/chromebook-linux-audio](https://github.com/WeirdTreeTh
 
 Stock distro kernels don't work correctly on all Chromebook hardware.
 Some platforms need specific kernel compile-time options that can't be
-fixed by loading modules after boot. The clearest example:
+fixed by loading modules after boot.
 
-**AMD Stoneyridge (Carrizo/Bristol Ridge) — e.g., Acer CB315-2H, Lenovo 300e Gen2 AMD:**
-- `CONFIG_DRM_AMDGPU` **must be `=y`** (built-in), not `=m` (module)
-- Stoney GPU firmware (`amdgpu/stoney_*.bin`) **must be compiled into** the kernel via `CONFIG_EXTRA_FIRMWARE`
-- Two commits in `sound/soc/dwc/` need reverting
-- Without these, `setup-audio` from chromebook-linux-audio will install UCM
-  configs correctly but audio will still not work — the I2S controller
-  never probes because AMDGPU isn't ready when the DW I2S driver initializes
+**AMD Stoneyridge — e.g., Acer CB315-2H, Lenovo 300e Gen2 AMD:**
+- Stoney GPU firmware (`amdgpu/stoney_*.bin`) must be compiled into the
+  kernel via `CONFIG_EXTRA_FIRMWARE`
+- Without this, the I2S controller never probes correctly because AMDGPU
+  isn't ready when the DW I2S driver initializes
 
-This system automates detecting which Chromebook you have and assembling
-the right kernel config for it.
+This system assembles the right kernel config for your Chromebook platform
+and builds installable `.deb` packages, either locally or via GitHub Actions.
+
+---
+
+## Audio Support
+
+For most platforms, install the kernel then run
+[chromebook-linux-audio](https://github.com/WeirdTreeThing/chromebook-linux-audio)
+to install UCM configs and topology files:
+
+```bash
+git clone https://github.com/WeirdTreeThing/chromebook-linux-audio
+cd chromebook-linux-audio && sudo ./setup-audio
+```
+
+**Stoney Ridge (6.19+):** Some users have reported full audio including
+microphone working on a pristine install with no additional steps required.
+Your experience may vary — if audio does not work,
+[chromebook-linux-audio](https://github.com/WeirdTreeThing/chromebook-linux-audio)
+is the recommended next step.
 
 ---
 
 ## Config Layer Architecture
 
-Every kernel config is assembled from **three layers merged in order**.
+Every kernel config is assembled from layers merged in order.
 Later layers override earlier ones for any conflicting option.
 
 ```
-Layer 1 — BASE (always applied)
+Layer 0 — KNOWN-GOOD BASE
+  configs/base/6.19.0-rc1.cfg
+  A full working kernel config used as the foundation.
+
+Layer 1 — CHROMEBOOK COMMON (always applied)
   configs/base/chromebooks-x86_64.cfg
-  Inspired by hexdump0815/kernel-config-options
   Contains: CrOS EC, input, MMC, WiFi, BT, SOF core, ALSA,
             common codecs, firmware loading, etc.
 
 Layer 2 — PLATFORM (per SoC family)
   configs/platform/<platform>.cfg
-  Examples: amd-stoneyridge.cfg, amd-ryzen-zork.cfg,
-            intel-cometlake.cfg, intel-tigerlake.cfg, intel-alderlake.cfg
-  Contains: GPU driver (=y vs =m), SOF/ACP backend, platform-specific
-            codecs, built-in firmware requirements
+  Contains: GPU driver settings, SOF/ACP backend, platform-specific
+            codecs, built-in firmware requirements.
 
 Layer 3 — DEVICE (per board codename, optional)
   configs/device/<codename>.cfg
-  Examples: aleena.cfg, treeya.cfg, kohaku.cfg
   Contains: only what differs from the platform default
             (e.g., specific codec present/absent on this board)
 ```
 
-The merge uses the kernel's own `scripts/kconfig/merge_config.sh` when
-available, falling back to `scripts/config` for each option.
+The merge uses the kernel's own `scripts/kconfig/merge_config.sh`.
 
 ---
 
@@ -61,40 +80,48 @@ available, falling back to `scripts/config` for each option.
 ```
 chromebook-kernel-builder/
 ├── configs/
-│   ├── hardware_map.conf       ← Maps codename → platform + kernel version
-│   ├── kernel_versions.conf    ← Maps kernel version
+│   ├── hardware_map.conf            ← Maps codename → platform + kernel version
+│   ├── kernel_versions.conf         ← Kernel series tracking
 │   ├── base/
-│   │   └── chromebooks-x86_64.cfg   ← Layer 1: always applied
+│   │   ├── 6.19.0-rc1.cfg           ← Layer 0: known-good full config
+│   │   └── chromebooks-x86_64.cfg   ← Layer 1: Chromebook common
 │   ├── platform/
-│   │   ├── amd-stoneyridge.cfg      ← Layer 2: AMD Stoneyridge
-│   │   ├── amd-ryzen-zork.cfg       ← Layer 2: AMD Ryzen (Zork family)
-│   │   ├── intel-cometlake.cfg      ← Layer 2: Intel 10th Gen (Hatch)
-│   │   ├── intel-tigerlake.cfg      ← Layer 2: Intel 11th Gen (Volteer)
-│   │   └── intel-alderlake.cfg      ← Layer 2: Intel 12th Gen (Brya)
+│   │   ├── stoney-ridge.cfg         ← AMD Stoneyridge (TREEYA360/GRUNT)
+│   │   ├── amd-grunt.cfg            ← AMD GRUNT family
+│   │   ├── amd-ryzen-zork.cfg       ← AMD Ryzen (Zork family)
+│   │   ├── geminilake.cfg           ← Intel GeminiLake (PHASER360)
+│   │   ├── intel-braswell.cfg       ← Intel Braswell (STRAGO)
+│   │   └── intel-cometlake.cfg      ← Intel 10th Gen (HATCH)
 │   └── device/
-│       ├── aleena.cfg               ← Layer 3: Acer CB315-2H overrides
-│       ├── treeya.cfg               ← Layer 3: Lenovo 300e Gen2 AMD
-│       └── kohaku.cfg               ← Layer 3: HP x360 14c
+│       ├── aleena.cfg               ← Acer CB315-2H (DA7219 codec)
+│       ├── treeya.cfg               ← Lenovo 300e Gen2 AMD (RT5682 codec)
+│       ├── relm.cfg                 ← CTL NL61 (RT5650 codec)
+│       └── setzer.cfg               ← HP Chromebook 11 G5 EE (RT5650 codec)
+
 ├── patches/
-│   └── amd-stoneyridge/
-│       └── README                   ← How to get/generate the DW I2S patches
+│   └── stoney-ridge/                ← Platform patches if needed
 ├── scripts/
 │   ├── build_kernel.sh              ← Main build orchestrator
-│   ├── merge_kernel_config.sh       ← 3-layer config merger
-│   ├── install_apt_pin.sh           ← APT pinning
+│   ├── merge_kernel_config.sh       ← Config layer merger + verification
+│   ├── install_apt_pin.sh           ← APT pinning to protect custom kernel
 │   └── add_device.sh                ← Helper: register a new board
-└── output/                          ← .deb packages land here
+└── output/                          ← Built .deb packages land here
 ```
 
 ---
 
 ## Quick Start
 
-### Build for the current machine (auto-detect):
+### Install build dependencies
 
 ```bash
 sudo apt-get install build-essential bc bison flex libssl-dev libelf-dev \
-     libncurses-dev dwarves pahole debhelper rsync
+     libncurses-dev dwarves pahole debhelper rsync ccache zstd
+```
+
+### Build for the current machine (auto-detect):
+
+```bash
 sudo ./scripts/build_kernel.sh
 ```
 
@@ -104,16 +131,16 @@ sudo ./scripts/build_kernel.sh
 sudo ./scripts/build_kernel.sh --codename aleena
 ```
 
-### Start from your running kernel config instead of defconfig:
+### Start from your running kernel config:
 
 ```bash
 sudo ./scripts/build_kernel.sh --codename aleena --base-config running
 ```
 
-### See what would happen without building:
+### Dry run (no build):
 
 ```bash
-./scripts/build_kernel.sh --codename morphius --dry-run
+./scripts/build_kernel.sh --codename treeya --dry-run
 ```
 
 ### Build and install in one step:
@@ -124,31 +151,39 @@ sudo ./scripts/build_kernel.sh --codename aleena --install
 
 ---
 
-## AMD Stoneyridge Workflow
+## GitHub Actions
 
-Stoneyridge is the most complex case. Full workflow:
+This repo includes a workflow that builds kernels automatically on push
+or on a weekly schedule, publishing `.deb` packages as release artifacts.
+
+To trigger a manual build:
+1. Go to **Actions** → **Build Chromebook Kernels**
+2. Click **Run workflow**
+3. Optionally specify a kernel series or platform filter
+4. Download the artifact from the completed run
+
+Pre-built kernels are published on the
+[Releases](../../releases) page.
+
+---
+
+## Installing a Pre-built Kernel
 
 ```bash
-# 1. Install prerequisites including AMD firmware
-sudo apt-get install firmware-amd-graphics zstd
+# Find your board codename
+cat /sys/class/dmi/id/board_name
 
-# 2. Get the DW I2S patches (see patches/amd-stoneyridge/README)
-#    Option A: Use prebuilt patches from chrultrabook.sakamoto.pl
-wget https://chrultrabook.sakamoto.pl/stoneyridge-kernel/patches/0001-revert-dwc-i2s.patch \
-     -O patches/amd-stoneyridge/0001-revert-dwc-i2s.patch
+# Look up your platform in hardware_map.conf, then install
+PLATFORM=stoney-ridge
+sudo dpkg -i linux-image-*-chromebook-${PLATFORM}*.deb \
+             linux-headers-*-chromebook-${PLATFORM}*.deb
 
-# 3. Build
-sudo ./scripts/build_kernel.sh --codename aleena   # or treeya, barla, etc.
+# Pin to prevent apt upgrades overwriting this kernel
+sudo cp 99-chromebook-kernel-${PLATFORM} /etc/apt/preferences.d/
 
-# 4. Install
-sudo dpkg -i output/linux-image-*-velvet-aleena*.deb \
-            output/linux-headers-*-velvet-aleena*.deb
-
-# 5. Reboot onto new kernel, then set up audio
+# Reboot, then set up audio if needed
 git clone https://github.com/WeirdTreeThing/chromebook-linux-audio
 cd chromebook-linux-audio && sudo ./setup-audio
-
-# 6. Reboot
 ```
 
 ---
@@ -166,39 +201,27 @@ sudo ./scripts/add_device.sh --codename mynewboard --platform intel-alderlake
 ```
 
 Then edit `configs/device/mynewboard.cfg` to add any board-specific
-overrides and rebuild.
-
-Alternatively, edit `hardware_map.conf` and `configs/device/` by hand:
-
-1. Add a line to `hardware_map.conf`:
-   ```
-   mynewboard|intel-alderlake|6.6|none|Acme Chromebook XYZ
-   ```
-
-2. Create `configs/device/mynewboard.cfg` with any overrides
-   (leave it empty/minimal if the platform config is already correct)
+overrides (codec drivers, disabled options, etc.) and rebuild.
 
 ---
 
 ## APT Pinning
 
-After a successful build, `install_apt_pin.sh` writes
-`/etc/apt/preferences.d/99-velvet-kernel-<codename>` which:
+After a successful build, `install_apt_pin.sh` writes a pin file which:
 
 - Pins your custom kernel at priority **1001** (protected from all upgrades)
-- Blocks kernel meta-packages (`linux-image-amd64`, `linux-generic`, etc.)
-  at priority **-1** (never install)
-- Runs `apt-mark hold` on the installed packages as a second layer
+- Blocks kernel meta-packages at priority **-1** (never auto-install)
+- Runs `apt-mark hold` as a second layer of protection
 
-To check the pin is working:
+Check the pin is working:
 ```bash
 apt-cache policy linux-image-$(uname -r)
 # Should show: *** <version> 1001
 ```
 
-To deliberately replace the kernel:
+Remove pinning to replace the kernel:
 ```bash
-sudo rm /etc/apt/preferences.d/99-velvet-kernel-<codename>
+sudo rm /etc/apt/preferences.d/99-chromebook-kernel-<platform>
 sudo apt-mark unhold linux-image-<version> linux-headers-<version>
 ```
 
@@ -206,13 +229,15 @@ sudo apt-mark unhold linux-image-<version> linux-headers-<version>
 
 ## Supported Platforms
 
-| Platform | Config file | Chromebook families | Key notes |
+| Platform config | Chromebook family | Devices | Audio notes |
 |---|---|---|---|
-| AMD Stoneyridge | `amd-stoneyridge.cfg` | GRUNT | AMDGPU=y, fw builtin, DW I2S patch |
-| AMD Ryzen (Zork) | `amd-ryzen-zork.cfg` | ZORK | SOF/ACP, no special requirements |
-| Intel Comet Lake | `intel-cometlake.cfg` | HATCH | SOF CML, standard path |
-| Intel Tiger Lake | `intel-tigerlake.cfg` | VOLTEER | SOF TGL + SoundWire |
-| Intel Alder Lake | `intel-alderlake.cfg` | BRYA | SOF ADL + SoundWire |
+| `stoney-ridge.cfg` | TREEYA360 | Lenovo 300e Gen2 AMD | Audio works out of box on 6.19+ |
+| `amd-grunt.cfg` | GRUNT | Aleena, Barla, Careena, etc. | chromebook-linux-audio recommended |
+| `amd-ryzen-zork.cfg` | ZORK | Morphius, Dalboz, Vilboz, etc. | chromebook-linux-audio recommended |
+| `geminilake.cfg` | PHASER360 | Lenovo 500e Gen2, C340, etc. | chromebook-linux-audio recommended |
+| `intel-braswell.cfg` | STRAGO | Gnawty, Relm, Setzer, etc. | chromebook-linux-audio recommended |
+| `intel-cometlake.cfg` | HATCH | Kohaku, Helios, etc. | chromebook-linux-audio recommended |
+
 
 ---
 
@@ -220,15 +245,8 @@ sudo apt-mark unhold linux-image-<version> linux-headers-<version>
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
 
-This project is inspired by and builds upon:
-- [hexdump0815/kernel-config-options](https://github.com/hexdump0815/kernel-config-options) (GPL-3.0)
-- [velvet-os/imagebuilder](https://github.com/velvet-os/imagebuilder) (GPL-3.0)
-- [WeirdTreeThing/chromebook-linux-audio](https://github.com/WeirdTreeThing/chromebook-linux-audio) (BSD-3-Clause)
-
-The kernel itself is GPL-2.0-only per its own license.
-
 ## Credits
 
 - [hexdump0815/kernel-config-options](https://github.com/hexdump0815/kernel-config-options) — base config approach
-- [WeirdTreeThing/chromebook-linux-audio](https://github.com/WeirdTreeThing/chromebook-linux-audio) — UCM/audio setup
-- [velvet-os/imagebuilder](https://github.com/velvet-os/imagebuilder) — the OS images this targets
+- [WeirdTreeThing/chromebook-linux-audio](https://github.com/WeirdTreeThing/chromebook-linux-audio) — UCM/audio setup (BSD-3-Clause)
+- [velvet-os/imagebuilder](https://github.com/velvet-os/imagebuilder) — original target OS (GPL-3.0)
