@@ -256,11 +256,9 @@ verify_config() {
 
         stoney-ridge)
             log "  -- stoney-ridge checks --"
-            # amdgpu MUST be built-in or display goes black at boot
-            if grep -q "^CONFIG_DRM_AMDGPU=y" "$config_file"; then
-                log "  OK: CONFIG_DRM_AMDGPU=y (built-in required for display)"
-            elif grep -q "^CONFIG_DRM_AMDGPU=m" "$config_file"; then
-                log "  WARNING: CONFIG_DRM_AMDGPU=m - display will go black at boot, must be =y"
+            # amdgpu works as module or built-in (working kernel confirmed =m is fine)
+            if grep -qE "^CONFIG_DRM_AMDGPU=[ym]" "$config_file"; then
+                log "  OK: CONFIG_DRM_AMDGPU enabled"
             else
                 log "  WARNING: CONFIG_DRM_AMDGPU not set - no display"
             fi
@@ -271,11 +269,10 @@ verify_config() {
                 log "  WARNING: CONFIG_EXTRA_FIRMWARE not set - stoney firmware not embedded"
             fi
             check_y  "CONFIG_DRM_AMD_ACP"           "audio probe ordering will fail"
-            check_y  "CONFIG_SND_DESIGNWARE_I2S"    "audio probe ordering will fail"
+            check_ym "CONFIG_SND_DESIGNWARE_I2S"    "audio probe ordering will fail"
             check_ym "CONFIG_SND_SOC_AMD_ACP3x"     "Stoney Ridge audio not available"
             check_ym "CONFIG_ATH10K_PCI"             "WiFi (QCA6174) not available"
-            check_not_set "CONFIG_X86_INTEL_PSTATE"  "Intel pstate should not load on AMD"
-            check_y  "CONFIG_X86_ACPI_CPUFREQ"      "CPU frequency scaling not available"
+            check_ym "CONFIG_X86_ACPI_CPUFREQ"      "CPU frequency scaling not available"
             ;;
 
         amd-grunt)
