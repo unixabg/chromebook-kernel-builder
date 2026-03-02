@@ -249,11 +249,15 @@ jobs:
         run: |
           sudo chown -R "$USER:$USER" "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           chmod +x scripts/merge_kernel_config.sh
+          BASE_CFG="defconfig"
+          if [[ "${{ matrix.platform }}" == "stoney-ridge" ]]; then
+            BASE_CFG="${GITHUB_WORKSPACE}/configs/base/6.19rc.cfg"
+          fi
           scripts/merge_kernel_config.sh \
             --kernel-src "/var/tmp/kernel-build/linux-${KERNEL_FULL}" \
             --codename "${{ matrix.codename }}" \
             --platform "${{ matrix.platform }}" \
-            --base-config defconfig
+            --base-config "$BASE_CFG"
 
       # --------------------------------------------------------
       # Build kernel .deb packages with ccache
