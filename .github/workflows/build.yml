@@ -5,14 +5,9 @@ on:
   schedule:
     - cron: '0 2 * * 0'
 
-  # Run on push to main (e.g. config or patch changes)
+  # Run on push to main when commit message contains [build:platform] or [build:all]
   push:
     branches: [ main ]
-    paths:
-      - 'configs/**'
-      - 'patches/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
 
   # Allow manual trigger with optional kernel version override
   workflow_dispatch:
@@ -105,11 +100,42 @@ jobs:
 
     steps:
       - name: Check platform filter
-        if: >
-          github.event.inputs.platform_filter != '' &&
-          github.event.inputs.platform_filter != matrix.platform
+        id: check_filter
         run: |
-          echo "Skipping ${{ matrix.platform }} (filter: ${{ github.event.inputs.platform_filter }})"
+          # schedule: always build all
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # workflow_dispatch: respect platform_filter input
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            FILTER="${{ github.event.inputs.platform_filter }}"
+            if [[ -z "$FILTER" || "$FILTER" == "all" || "$FILTER" == "${{ matrix.platform }}" ]]; then
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          # push: require [build:target] or [build:all] in commit message
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          BUILD_TAG=$(echo "$COMMIT_MSG" | grep -oP '(?<=\[build:)[^\]]+' || true)
+
+          if [[ -z "$BUILD_TAG" ]]; then
+            echo "No [build:*] tag in commit message - skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$BUILD_TAG" == "all" || "$BUILD_TAG" == "${{ matrix.platform }}" ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if not targeted
+        if: steps.check_filter.outputs.skip == 'true'
+        run: |
+          echo "Skipping ${{ matrix.platform }} - not targeted by this build"
           exit 0
 
       - name: Checkout
