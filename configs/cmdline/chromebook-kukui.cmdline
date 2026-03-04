@@ -1,1 +1,1 @@
-console=tty1 root=PARTUUID=%U/PARTNROFF=1 rootwait rw noinitrd init=/sbin/init
+console=tty1 root=PARTUUID=%U/PARTNROFF=3 rootwait rw noinitrd init=/sbin/init
