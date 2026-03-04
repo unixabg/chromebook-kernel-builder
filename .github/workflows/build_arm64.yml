@@ -1,0 +1,404 @@
+name: Build ARM64 Chromebook Kernels
+
+on:
+  # Run weekly on Sunday at 04:00 UTC (offset from x86_64 job at 02:00)
+  schedule:
+    - cron: '0 4 * * 0'
+
+  # Run on push to main when commit message contains [build:arm64] or [build:all]
+  push:
+    branches: [ main ]
+
+  # Allow manual trigger with optional overrides
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: 'Kernel series override (e.g. 6.19), leave blank to use DEFAULT_SERIES_ARM64'
+        required: false
+        default: ''
+      platform_filter:
+        description: 'Build only this platform (e.g. mediatek-mt8183), leave blank for all'
+        required: false
+        default: ''
+
+jobs:
+  # ============================================================
+  # Resolve the kernel version once, share across matrix jobs
+  # ============================================================
+  resolve-version:
+    name: Resolve kernel version
+    runs-on: ubuntu-24.04
+    outputs:
+      kernel_series: ${{ steps.resolve.outputs.kernel_series }}
+      kernel_full:   ${{ steps.resolve.outputs.kernel_full }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve kernel version
+        id: resolve
+        run: |
+          if [[ -n "${{ github.event.inputs.kernel_version }}" ]]; then
+            SERIES="${{ github.event.inputs.kernel_version }}"
+          else
+            SERIES=$(grep "^DEFAULT_SERIES_ARM64=" configs/kernel_versions.conf \
+                     | cut -d= -f2)
+          fi
+
+          if [[ -z "$SERIES" ]]; then
+            echo "ERROR: DEFAULT_SERIES_ARM64 not set in configs/kernel_versions.conf"
+            exit 1
+          fi
+
+          echo "Kernel series: $SERIES"
+          echo "kernel_series=$SERIES" >> "$GITHUB_OUTPUT"
+
+          FULL=$(curl -s --max-time 15 "https://www.kernel.org/releases.json" | \
+            grep -o '"version": *"[0-9]*\.[0-9]*\.[0-9]*"' | \
+            grep -o '"[0-9]*\.[0-9]*\.[0-9]*"' | \
+            tr -d '"' | \
+            grep "^${SERIES}\." | \
+            sort -t. -k1,1n -k2,2n -k3,3n | \
+            tail -1)
+
+          if [[ -z "$FULL" ]]; then
+            echo "ERROR: Could not resolve latest ${SERIES}.x from kernel.org"
+            exit 1
+          fi
+          echo "Resolved: linux-$FULL"
+          echo "kernel_full=$FULL" >> "$GITHUB_OUTPUT"
+
+  # ============================================================
+  # Build matrix - one job per platform
+  # ============================================================
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: resolve-version
+    runs-on: ubuntu-24.04-arm   # native arm64 - no cross-compile needed
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mediatek-mt8183
+            codename: esche
+
+    steps:
+      - name: Check platform filter
+        id: check_filter
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            FILTER="${{ github.event.inputs.platform_filter }}"
+            if [[ -z "$FILTER" || "$FILTER" == "all" || "$FILTER" == "${{ matrix.platform }}" ]]; then
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          # push: require [build:arm64], [build:mediatek-mt8183], or [build:all]
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          BUILD_TAG=$(echo "$COMMIT_MSG" | grep -oP '(?<=\[build:)[^\]]+' || true)
+
+          if [[ -z "$BUILD_TAG" ]]; then
+            echo "No [build:*] tag in commit message - skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$BUILD_TAG" == "all" \
+               || "$BUILD_TAG" == "arm64" \
+               || "$BUILD_TAG" == "${{ matrix.platform }}" ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if not targeted
+        if: steps.check_filter.outputs.skip == 'true'
+        run: |
+          echo "Skipping ${{ matrix.platform }} - not targeted by this build"
+          exit 0
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Cache kernel tarball - keyed by full version
+      # --------------------------------------------------------
+      - name: Cache kernel tarball
+        uses: actions/cache@v4
+        with:
+          path: /var/tmp/kernel-tarballs
+          key: kernel-tarball-arm64-${{ needs.resolve-version.outputs.kernel_full }}
+
+      # --------------------------------------------------------
+      # Cache ccache - keyed by platform + series
+      # --------------------------------------------------------
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_full }}
+          restore-keys: |
+            ccache-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_series }}.
+            ccache-${{ matrix.platform }}-
+
+      # --------------------------------------------------------
+      # Install build dependencies
+      # --------------------------------------------------------
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential bc bison flex \
+            libssl-dev libelf-dev libncurses-dev \
+            libdw-dev dwarves pahole \
+            kmod wget curl git xz-utils \
+            ccache \
+            liblz4-tool \
+            u-boot-tools \
+            vboot-kernel-utils
+
+      # --------------------------------------------------------
+      # Download kernel source (uses cache if available)
+      # --------------------------------------------------------
+      - name: Download kernel source
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+        run: |
+          mkdir -p /var/tmp/kernel-tarballs
+          TARBALL="/var/tmp/kernel-tarballs/linux-${KERNEL_FULL}.tar.xz"
+          if [[ ! -f "$TARBALL" ]]; then
+            MAJOR="${KERNEL_FULL%%.*}"
+            echo "Downloading linux-${KERNEL_FULL}.tar.xz..."
+            wget -q -O "$TARBALL" \
+              "https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${KERNEL_FULL}.tar.xz"
+          else
+            echo "Using cached tarball"
+          fi
+          echo "Extracting..."
+          mkdir -p /var/tmp/kernel-build
+          tar -xf "$TARBALL" -C /var/tmp/kernel-build
+          echo "Source ready: /var/tmp/kernel-build/linux-${KERNEL_FULL}"
+
+      # --------------------------------------------------------
+      # Apply patches
+      # --------------------------------------------------------
+      - name: Apply patches
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+        run: |
+          sudo chown -R "$USER:$USER" "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
+          PATCH_DIR="patches/${{ matrix.platform }}"
+          SRCDIR="/var/tmp/kernel-build/linux-${KERNEL_FULL}"
+          cd "$SRCDIR"
+          if [[ -d "${GITHUB_WORKSPACE}/${PATCH_DIR}" ]]; then
+            shopt -s nullglob
+            patches=("${GITHUB_WORKSPACE}/${PATCH_DIR}"/*.patch)
+            if [[ ${#patches[@]} -gt 0 ]]; then
+              echo "Applying ${#patches[@]} patch(es)..."
+              for p in "${patches[@]}"; do
+                echo "  $(basename "$p")"
+                patch -p1 --forward < "$p" \
+                  || echo "WARNING: patch $(basename "$p") did not apply cleanly"
+              done
+            else
+              echo "No patches to apply"
+            fi
+          else
+            echo "No patch directory for ${{ matrix.platform }}"
+          fi
+
+      # --------------------------------------------------------
+      # Merge kernel config
+      # Picks the best available mainline MT8183 defconfig
+      # (mt8183_defconfig > mediatek_defconfig > defconfig), runs
+      # olddefconfig, then applies any device overlay.
+      # The verify step logs warnings for any missing MT8183 options.
+      # --------------------------------------------------------
+      - name: Merge kernel config
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+        run: |
+          chmod +x scripts/merge_kernel_config_arm64.sh
+          scripts/merge_kernel_config_arm64.sh \
+            --kernel-src "/var/tmp/kernel-build/linux-${KERNEL_FULL}" \
+            --platform   "${{ matrix.platform }}" \
+            --codename   "${{ matrix.codename }}"
+
+      # --------------------------------------------------------
+      # Build kernel
+      # --------------------------------------------------------
+      - name: Build kernel
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+        run: |
+          export CCACHE_DIR=~/.ccache
+          ccache -s
+
+          LOCAL_VERSION="-chromebook-${{ matrix.platform }}"
+
+          cd "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
+          time make ARCH=arm64 \
+            CC="ccache gcc" \
+            LOCALVERSION="${LOCAL_VERSION}" \
+            INSTALL_MOD_STRIP=1 \
+            -j$(nproc) \
+            Image dtbs modules
+
+          ccache -s
+          echo "LOCAL_VERSION=${LOCAL_VERSION}" >> "$GITHUB_ENV"
+
+      # --------------------------------------------------------
+      # Package tar.gz (stage, FIT image, vbutil sign, tar)
+      # --------------------------------------------------------
+      - name: Package tar.gz
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+        run: |
+          KSRC="/var/tmp/kernel-build/linux-${KERNEL_FULL}"
+          kver=$(make -C "$KSRC" ARCH=arm64 kernelrelease)
+          echo "Packaging: $kver"
+
+          STAGE=$(mktemp -d)
+          BOOT="${STAGE}/boot"
+          mkdir -p "${BOOT}"
+
+          make -C "$KSRC" ARCH=arm64 \
+            INSTALL_MOD_PATH="${STAGE}" \
+            INSTALL_MOD_STRIP=1 \
+            modules_install
+
+          cp "${KSRC}/.config"               "${BOOT}/config-${kver}"
+          cp "${KSRC}/arch/arm64/boot/Image" "${BOOT}/Image-${kver}"
+          cp "${KSRC}/System.map"            "${BOOT}/System.map-${kver}"
+
+          mkdir -p "${BOOT}/dtb-${kver}"
+          cp "${KSRC}"/arch/arm64/boot/dts/mediatek/mt8183-kukui-*.dtb \
+             "${BOOT}/dtb-${kver}/"
+
+          DTB_COUNT=$(find "${BOOT}/dtb-${kver}" -name '*.dtb' | wc -l)
+          echo "Staged ${DTB_COUNT} DTB(s)"
+          [[ "$DTB_COUNT" -eq 0 ]] && { echo "ERROR: no DTBs produced"; exit 1; }
+
+          # lz4 compress Image
+          lz4 -f "${BOOT}/Image-${kver}" "${STAGE}/Image.lz4"
+
+          # Empty bootloader stub required by vbutil_kernel
+          dd if=/dev/zero of="${STAGE}/bootloader.bin" bs=512 count=1 2>/dev/null
+
+          # Collect DTBs for mkimage
+          DTB_ARGS=()
+          while IFS= read -r -d '' dtb; do
+            DTB_ARGS+=(-b "$dtb")
+          done < <(find "${BOOT}/dtb-${kver}" -name '*.dtb' -print0 | sort -z)
+
+          # FIT image: lz4 Image + all kukui DTBs
+          mkimage \
+            -D "-I dts -O dtb -p 2048" \
+            -f auto -A arm64 -O linux -T kernel -C lz4 -a 0 \
+            -d "${STAGE}/Image.lz4" \
+            "${DTB_ARGS[@]}" \
+            "${STAGE}/kernel.itb"
+
+          # Sign with ChromeOS developer keys
+          vbutil_kernel \
+            --pack "${BOOT}/vmlinux.kpart-${kver}" \
+            --keyblock    /usr/share/vboot/devkeys/kernel.keyblock \
+            --signprivate /usr/share/vboot/devkeys/kernel_data_key.vbprivk \
+            --version 1 \
+            --config      configs/cmdline/chromebook-kukui.cmdline \
+            --bootloader  "${STAGE}/bootloader.bin" \
+            --vmlinuz     "${STAGE}/kernel.itb" \
+            --arch arm
+
+          # Verify before packaging
+          vbutil_kernel \
+            --verify "${BOOT}/vmlinux.kpart-${kver}" \
+            --signpubkey /usr/share/vboot/devkeys/kernel_subkey.vbpubk
+
+          mkdir -p output
+          TARBALL="output/${kver}-${{ matrix.platform }}.tar.gz"
+          tar czf "${TARBALL}" \
+            -C "${STAGE}" \
+            "boot/Image-${kver}" \
+            "boot/System.map-${kver}" \
+            "boot/config-${kver}" \
+            "boot/dtb-${kver}" \
+            "boot/vmlinux.kpart-${kver}" \
+            "lib/modules/${kver}"
+
+          cp "${KSRC}/.config" "output/config.${{ matrix.platform }}-${kver}"
+          rm -rf "${STAGE}"
+
+          echo "Output:"
+          ls -lh output/
+
+      # --------------------------------------------------------
+      # Upload artifacts
+      # --------------------------------------------------------
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_full }}
+          path: output/
+          retention-days: 30
+
+  # ============================================================
+  # Release - only on schedule or workflow_dispatch
+  # ============================================================
+  release:
+    name: Create release
+    needs: [ resolve-version, build ]
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-files
+          pattern: kernel-*
+          merge-multiple: true
+
+      - name: Show release contents
+        run: ls -lh release-files/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve-version.outputs.kernel_full }}-chromebook-arm64
+          name: "ARM64 Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }}"
+          body: |
+            ## ARM64 Chromebook Kernels
+
+            Kernel version: **linux-${{ needs.resolve-version.outputs.kernel_full }}**
+            Built: ${{ github.run_id }}
+
+            Base config: mainline kernel defconfig (mt8183_defconfig or mediatek_defconfig if available, else arm64 defconfig + device overlay)
+
+            ### Platforms
+            | Tarball | SoC | Boards |
+            |---|---|---|
+            | *-chromebook-mediatek-mt8183.tar.gz | MT8183 | HP 11MK G9 EE (esche), Acer 311, Lenovo Duet, Lenovo 10e |
+
+            ### Installation
+            ```bash
+            sudo tar xzf <tarball>.tar.gz -C /
+            KERN=$(cgpt find -t kernel /dev/mmcblk1 | head -1)
+            sudo dd if=/boot/vmlinux.kpart-<kver> of="${KERN}" bs=4M
+            sudo cgpt add -i "${KERN##*p}" -P 15 -T 1 -S 1 /dev/mmcblk1
+            sudo reboot
+            ```
+          files: release-files/*
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
