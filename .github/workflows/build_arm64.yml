@@ -269,7 +269,7 @@ jobs:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
           KSRC="/var/tmp/kernel-build/linux-${KERNEL_FULL}"
-          kver=$(make -C "$KSRC" ARCH=arm64 --no-print-directory kernelrelease)
+          kver=$(make -C "$KSRC" ARCH=arm64 LOCALVERSION="${LOCAL_VERSION}" --no-print-directory kernelrelease)
           echo "Packaging: $kver"
 
           STAGE=$(mktemp -d)
