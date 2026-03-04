@@ -134,11 +134,10 @@ jobs:
 
       - name: Skip if not targeted
         if: steps.check_filter.outputs.skip == 'true'
-        run: |
-          echo "Skipping ${{ matrix.platform }} - not targeted by this build"
-          exit 0
+        run: echo "Skipping ${{ matrix.platform }} - not targeted by this build"
 
       - name: Checkout
+        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/checkout@v4
 
       # --------------------------------------------------------
@@ -146,6 +145,7 @@ jobs:
       # Saves ~140MB download on repeat runs for same version
       # --------------------------------------------------------
       - name: Cache kernel tarball
+        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: /var/tmp/kernel-tarballs
@@ -156,6 +156,7 @@ jobs:
       # Falls back to any previous cache for this platform
       # --------------------------------------------------------
       - name: Cache ccache
+        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.ccache
@@ -168,6 +169,7 @@ jobs:
       # Install build dependencies
       # --------------------------------------------------------
       - name: Install build dependencies
+        if: steps.check_filter.outputs.skip != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -182,6 +184,7 @@ jobs:
       # Platform-specific firmware prerequisites
       # --------------------------------------------------------
       - name: Install platform firmware
+        if: steps.check_filter.outputs.skip != 'true'
         run: |
           case "${{ matrix.platform }}" in
             stoney-ridge|amd-grunt|amd-ryzen-zork|amd-mendocino)
@@ -219,6 +222,7 @@ jobs:
       # Download kernel source (uses cache if available)
       # --------------------------------------------------------
       - name: Download kernel source
+        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -242,6 +246,7 @@ jobs:
       # Apply patches
       # --------------------------------------------------------
       - name: Apply patches
+        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -270,6 +275,7 @@ jobs:
       # Merge kernel config
       # --------------------------------------------------------
       - name: Merge kernel config
+        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -289,6 +295,7 @@ jobs:
       # Build kernel .deb packages with ccache
       # --------------------------------------------------------
       - name: Build kernel
+        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
           CODENAME: ${{ matrix.codename }}
@@ -316,6 +323,7 @@ jobs:
       # Generate APT pin file
       # --------------------------------------------------------
       - name: Generate APT pin file
+        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
           CODENAME: ${{ matrix.codename }}
@@ -334,6 +342,7 @@ jobs:
       # Collect output files
       # --------------------------------------------------------
       - name: Collect output
+        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
           CODENAME: ${{ matrix.codename }}
@@ -348,6 +357,7 @@ jobs:
       # Upload as workflow artifact
       # --------------------------------------------------------
       - name: Upload artifacts
+        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_full }}

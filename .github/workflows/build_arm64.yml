@@ -120,17 +120,17 @@ jobs:
 
       - name: Skip if not targeted
         if: steps.check_filter.outputs.skip == 'true'
-        run: |
-          echo "Skipping ${{ matrix.platform }} - not targeted by this build"
-          exit 0
+        run: echo "Skipping ${{ matrix.platform }} - not targeted by this build"
 
       - name: Checkout
+        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/checkout@v4
 
       # --------------------------------------------------------
       # Cache kernel tarball - keyed by full version
       # --------------------------------------------------------
       - name: Cache kernel tarball
+        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: /var/tmp/kernel-tarballs
@@ -140,6 +140,7 @@ jobs:
       # Cache ccache - keyed by platform + series
       # --------------------------------------------------------
       - name: Cache ccache
+        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.ccache
@@ -152,6 +153,7 @@ jobs:
       # Install build dependencies
       # --------------------------------------------------------
       - name: Install build dependencies
+        if: steps.check_filter.outputs.skip != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -168,6 +170,7 @@ jobs:
       # Download kernel source (uses cache if available)
       # --------------------------------------------------------
       - name: Download kernel source
+        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -190,6 +193,7 @@ jobs:
       # Apply patches
       # --------------------------------------------------------
       - name: Apply patches
+        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -222,6 +226,7 @@ jobs:
       # The verify step logs warnings for any missing MT8183 options.
       # --------------------------------------------------------
       - name: Merge kernel config
+        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -235,6 +240,7 @@ jobs:
       # Build kernel
       # --------------------------------------------------------
       - name: Build kernel
+        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -258,11 +264,12 @@ jobs:
       # Package tar.gz (stage, FIT image, vbutil sign, tar)
       # --------------------------------------------------------
       - name: Package tar.gz
+        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
           KSRC="/var/tmp/kernel-build/linux-${KERNEL_FULL}"
-          kver=$(make -C "$KSRC" ARCH=arm64 kernelrelease)
+          kver=$(make -C "$KSRC" ARCH=arm64 --no-print-directory kernelrelease)
           echo "Packaging: $kver"
 
           STAGE=$(mktemp -d)
@@ -343,6 +350,7 @@ jobs:
       # Upload artifacts
       # --------------------------------------------------------
       - name: Upload artifacts
+        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_full }}
