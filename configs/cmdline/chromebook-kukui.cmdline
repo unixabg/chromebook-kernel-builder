@@ -1,1 +1,1 @@
-console=tty1 root=PARTUUID=%U/PARTNROFF=3 rootwait rw noinitrd init=/sbin/init
+console=tty1 root=PARTUUID=%U/PARTNROFF=3 rootwait rw noinitrd init=/sbin/init fsck.repair=yes console=ttyS0,115200n8 earlycon
