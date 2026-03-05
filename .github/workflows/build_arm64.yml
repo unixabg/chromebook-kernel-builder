@@ -247,7 +247,7 @@ jobs:
           export CCACHE_DIR=~/.ccache
           ccache -s
 
-          LOCAL_VERSION="-chromebook-${{ matrix.platform }}"
+          LOCAL_VERSION="-chromebook-${{ matrix.platform }}-velvet-os"
 
           cd "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           time make ARCH=arm64 \
@@ -330,7 +330,8 @@ jobs:
             --signpubkey /usr/share/vboot/devkeys/kernel_subkey.vbpubk
 
           mkdir -p output
-          TARBALL="output/${kver}-${{ matrix.platform }}.tar.gz"
+          BUILD_DATE=$(date +%Y%m%d)
+          TARBALL="output/${kver}-velvet-os-${BUILD_DATE}.tar.gz"
           tar czf "${TARBALL}" \
             -C "${STAGE}" \
             "boot/Image-${kver}" \
@@ -340,7 +341,7 @@ jobs:
             "boot/vmlinux.kpart-${kver}" \
             "lib/modules/${kver}"
 
-          cp "${KSRC}/.config" "output/config.${{ matrix.platform }}-${kver}"
+          cp "${KSRC}/.config" "output/config.${kver}-velvet-os-${BUILD_DATE}"
           rm -rf "${STAGE}"
 
           echo "Output:"
@@ -396,7 +397,7 @@ jobs:
             ### Platforms
             | Tarball | SoC | Boards |
             |---|---|---|
-            | *-chromebook-mediatek-mt8183.tar.gz | MT8183 | HP 11MK G9 EE (esche), Acer 311, Lenovo Duet, Lenovo 10e |
+            | *-chromebook-mediatek-mt8183-velvet-os-YYYYMMDD.tar.gz | MT8183 | HP 11MK G9 EE (esche), Acer 311, Lenovo Duet, Lenovo 10e |
 
             ### Installation
             ```bash
