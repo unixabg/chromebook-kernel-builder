@@ -1,1 +1,1 @@
-console=tty1 root=LABEL=rootpart rootwait ro fsck.fix=yes fsck.repair=yes net.ifnames=0 ipv6.disable=1 quiet splash console=ttyS0,115200n8 earlycon
+root=LABEL=rootpart console=tty1 rootwait ro fsck.fix=yes fsck.repair=yes net.ifnames=0 ipv6.disable=1 quiet splash console=ttyS0,115200n8 earlycon
