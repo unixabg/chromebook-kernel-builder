@@ -6,12 +6,10 @@
 # working x86_64 pipeline is never touched.
 #
 # Strategy:
-#   1. Pick the best available mainline defconfig for MediaTek MT8183:
-#        a. mt8183_defconfig         -- ideal, SoC-specific if it exists
-#        b. mediatek_defconfig       -- broader MediaTek coverage
-#        c. defconfig                -- generic arm64 fallback
-#      Logs clearly which was chosen so you know what you are building on.
-#   2. make ARCH=arm64 olddefconfig  -- resolves any symbol changes
+#   1. Use configs/base/<platform>.config as the base (known-working config)
+#   2. make ARCH=arm64 olddefconfig  -- adapts it to whatever kernel version
+#      we are actually building (fills new symbols with Kconfig defaults,
+#      drops removed symbols)
 #   3. Apply configs/device/<codename>.cfg if it exists (optional overrides)
 #   4. Verify critical MT8183 options are present, warn on anything missing
 #
@@ -49,31 +47,24 @@ log() { echo "[merge_config_arm64] $*"; }
 
 cd "$KERNEL_SRC"
 
-# ── Step 1: Pick best available mainline defconfig ────────────────────────────
-CONFIGS_DIR="arch/arm64/configs"
+# ── Step 1: Copy known-working base config ────────────────────────────────────
+BASE_CONFIG="${REPO_DIR}/configs/base/${PLATFORM}.config"
 
-log "Available defconfigs in ${CONFIGS_DIR}:"
-ls "${CONFIGS_DIR}/" | sed 's/^/  /' || true
-
-if [[ -f "${CONFIGS_DIR}/mt8183_defconfig" ]]; then
-    BASE_DEFCONFIG="mt8183_defconfig"
-    log "Selected: mt8183_defconfig (SoC-specific - best option)"
-elif [[ -f "${CONFIGS_DIR}/mediatek_defconfig" ]]; then
-    BASE_DEFCONFIG="mediatek_defconfig"
-    log "Selected: mediatek_defconfig (MediaTek platform config)"
-    log "  Note: review missing MT8183-specific options in the verify step below"
-else
-    BASE_DEFCONFIG="defconfig"
-    log "Selected: defconfig (generic arm64 - expect warnings in verify step)"
-    log "  Neither mt8183_defconfig nor mediatek_defconfig found in this kernel."
-    log "  The device overlay and verify step will flag what needs attention."
+if [[ ! -f "$BASE_CONFIG" ]]; then
+    log "ERROR: base config not found: $BASE_CONFIG"
+    log "  Expected a known-working config at configs/base/${PLATFORM}.config"
+    exit 1
 fi
 
-log "Building from: make ARCH=arm64 ${BASE_DEFCONFIG}"
-make ARCH=arm64 "${BASE_DEFCONFIG}"
+log "Using base config: configs/base/${PLATFORM}.config"
+log "  ($(wc -l < "$BASE_CONFIG") lines)"
+cp "$BASE_CONFIG" .config
 
 # ── Step 2: olddefconfig ──────────────────────────────────────────────────────
-log "Running olddefconfig..."
+# Adapts the base config to the kernel version we are actually building.
+# New symbols introduced since the base config was made get their Kconfig
+# default values. Removed symbols are dropped cleanly.
+log "Running olddefconfig to adapt base config to $(basename "$KERNEL_SRC")..."
 make ARCH=arm64 olddefconfig
 
 # ── Step 3: Optional device overlay ───────────────────────────────────────────
@@ -109,11 +100,10 @@ fi
 
 log ""
 log "=== Config merge complete: ${KERNEL_SRC}/.config ==="
-log "=== Base defconfig used: ${BASE_DEFCONFIG} ==="
+log "=== Base: configs/base/${PLATFORM}.config + olddefconfig for $(basename "$KERNEL_SRC") ==="
 log ""
 
 # ── Step 4: Verify critical MT8183 options ────────────────────────────────────
-# WARNINGs here are not fatal - they tell you what to add to esche.cfg
 verify_config() {
     local cfg="${KERNEL_SRC}/.config"
     local warnings=0
@@ -142,30 +132,30 @@ verify_config() {
             log "  -- SoC core --"
             check_y  "CONFIG_COMMON_CLK_MT8183" "SoC clocks missing - will not boot"
             check_ym "CONFIG_PINCTRL_MT8183"    "pinctrl missing - many devices will fail"
-            check_ym "CONFIG_I2C_MT65XX"        "I2C missing - touchpad and codec will fail"
-            check_ym "CONFIG_SPI_MT65XX"        "SPI missing - EC communication may fail"
+            check_y  "CONFIG_I2C_MT65XX"        "I2C must be built-in"
+            check_y  "CONFIG_SPI_MT65XX"        "SPI must be built-in"
             check_ym "CONFIG_MMC_MTK"           "eMMC will not be detected"
+            check_y  "CONFIG_MTK_PMIC_WRAP"     "PMIC bus missing - power management broken"
+            check_y  "CONFIG_MTK_IOMMU"         "IOMMU missing - display/GPU DMA broken"
+            check_y  "CONFIG_MTK_CMDQ"          "display command queue missing"
 
             log "  -- ChromeOS EC --"
             check_ym "CONFIG_CROS_EC"           "keyboard and touchpad will not work"
             check_ym "CONFIG_CROS_EC_SPI"       "EC SPI transport missing"
 
             log "  -- Display --"
-            check_ym "CONFIG_DRM_PANFROST"      "GPU unavailable - no display"
+            check_ym "CONFIG_DRM_PANFROST"      "GPU unavailable"
             check_ym "CONFIG_DRM_MEDIATEK"      "display engine unavailable"
 
             log "  -- Audio --"
             check_ym "CONFIG_SND_SOC_MT8183"    "audio platform driver missing"
 
             log "  -- WiFi --"
-            check_ym "CONFIG_ATH10K"            "ath10k missing (QCA6174A on esche)"
-            check_ym "CONFIG_ATH10K_SDIO"       "ath10k SDIO missing (QCA6174A on esche)"
+            check_ym "CONFIG_ATH10K"            "ath10k missing"
+            check_ym "CONFIG_ATH10K_SDIO"       "ath10k SDIO missing"
 
-            log "  -- USB-C --"
-            check_ym "CONFIG_TYPEC_FUSB302"     "USB-C PD controller unavailable"
-
-            log "  -- Power --"
-            check_ym "CONFIG_CHARGER_MT6360"    "battery charging unavailable"
+            log "  -- Filesystem --"
+            check_y  "CONFIG_BTRFS_FS"          "btrfs must be built-in (velvet-os root, no initramfs)"
             ;;
         *)
             log "  INFO: no checks defined for platform '$PLATFORM'"
@@ -174,7 +164,7 @@ verify_config() {
 
     log ""
     if [[ "$warnings" -gt 0 ]]; then
-        log "  ${warnings} WARNING(s) above - add missing options to configs/device/${CODENAME}.cfg"
+        log "  ${warnings} WARNING(s) - add missing options to configs/device/${CODENAME}.cfg"
     else
         log "  All critical options present"
     fi
