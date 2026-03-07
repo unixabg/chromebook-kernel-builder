@@ -1,10 +1,5 @@
-# Credit: hexdump0815
-# <https://github.com/hexdump0815/linux-mainline-mediatek-mt81xx-kernel>
-# Source: misc.cbm/patches/v6.14/mt8183-fennel14-audio-hack.patch
-# Retrieved: 2025-03-06
-#
-# with this we at least get speaker audio on fennel14 devices instead
-# of audio probing errors ...
+with this we at least get speaker audio on fennel14 devices instead
+of audio probing errors ...
 
 diff --git a/sound/soc/mediatek/mt8183/mt8183-da7219-max98357.c b/sound/soc/mediatek/mt8183/mt8183-da7219-max98357.c
 index f848e14b091a..1e6a1cdbd246 100644
