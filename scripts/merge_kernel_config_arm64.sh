@@ -67,7 +67,64 @@ cp "$BASE_CONFIG" .config
 log "Running olddefconfig to adapt base config to $(basename "$KERNEL_SRC")..."
 make ARCH=arm64 olddefconfig
 
-# ── Step 3: Optional device overlay ───────────────────────────────────────────
+# ── Step 3: Optional external config options (hexdump0815 misc.cbm/options/) ──
+# If ARM64_EXT_DIR is set (populated by the workflow clone step), apply
+# additional-options-special.cfg and process options-to-remove-special.cfg.
+# This keeps us in sync with hexdump0815's known-working config fragment
+# without manually copying files into this repo.
+EXT_DIR="${ARM64_EXT_DIR:-}"
+if [[ -n "$EXT_DIR" && -d "${EXT_DIR}/misc.cbm/options" ]]; then
+    OPTIONS_DIR="${EXT_DIR}/misc.cbm/options"
+    log "Applying external config options from: $OPTIONS_DIR"
+
+    # additions
+    ADD_CFG="${OPTIONS_DIR}/additional-options-special.cfg"
+    if [[ -f "$ADD_CFG" ]]; then
+        log "  additional-options-special.cfg ($(wc -l < "$ADD_CFG") lines)"
+        if [[ -x "$KMERGE" ]]; then
+            ARCH=arm64 "${KMERGE}" -m -r .config "$ADD_CFG"
+            [[ -f ".config.new" ]] && mv .config.new .config
+        else
+            SC="${KERNEL_SRC}/scripts/config"
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                [[ -z "${line//[[:space:]]/}" ]] && continue
+                [[ "$line" == \#* && ! "$line" == *"is not set"* ]] && continue
+                if [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=([ym])$ ]]; then
+                    key="${BASH_REMATCH[1]#CONFIG_}"
+                    [[ "${BASH_REMATCH[2]}" == "y" ]] && "$SC" --enable "$key" || "$SC" --module "$key"
+                elif [[ "$line" =~ ^#[[:space:]]+(CONFIG_[A-Z0-9_]+)[[:space:]]+is[[:space:]]+not[[:space:]]+set ]]; then
+                    "$SC" --disable "${BASH_REMATCH[1]#CONFIG_}"
+                elif [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=\"(.*)\"$ ]]; then
+                    "$SC" --set-str "${BASH_REMATCH[1]#CONFIG_}" "${BASH_REMATCH[2]}"
+                elif [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=(.+)$ ]]; then
+                    "$SC" --set-val "${BASH_REMATCH[1]#CONFIG_}" "${BASH_REMATCH[2]}"
+                fi
+            done < "$ADD_CFG"
+        fi
+        make ARCH=arm64 olddefconfig
+    fi
+
+    # removals (lines like CONFIG_FOO=n or # CONFIG_FOO is not set)
+    RM_CFG="${OPTIONS_DIR}/options-to-remove-special.cfg"
+    if [[ -f "$RM_CFG" ]]; then
+        log "  options-to-remove-special.cfg ($(wc -l < "$RM_CFG") lines)"
+        SC="${KERNEL_SRC}/scripts/config"
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ -z "${line//[[:space:]]/}" ]] && continue
+            [[ "$line" == \#* && ! "$line" == *"is not set"* ]] && continue
+            if [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=n$ ]]; then
+                "$SC" --disable "${BASH_REMATCH[1]#CONFIG_}"
+            elif [[ "$line" =~ ^#[[:space:]]+(CONFIG_[A-Z0-9_]+)[[:space:]]+is[[:space:]]+not[[:space:]]+set ]]; then
+                "$SC" --disable "${BASH_REMATCH[1]#CONFIG_}"
+            fi
+        done < "$RM_CFG"
+        make ARCH=arm64 olddefconfig
+    fi
+else
+    log "INFO: ARM64_EXT_DIR not set or missing misc.cbm/options - skipping external config fragments"
+fi
+
+# ── Step 4: Optional device overlay ──────────────────────────────────────────
 DEVICE_FRAG="${REPO_DIR}/configs/device/${CODENAME}.cfg"
 KMERGE="${KERNEL_SRC}/scripts/kconfig/merge_config.sh"
 
@@ -103,7 +160,7 @@ log "=== Config merge complete: ${KERNEL_SRC}/.config ==="
 log "=== Base: configs/base/${PLATFORM}.config + olddefconfig for $(basename "$KERNEL_SRC") ==="
 log ""
 
-# ── Step 4: Verify critical MT8183 options ────────────────────────────────────
+# ── Step 5: Verify critical MT8183 options ────────────────────────────────────
 verify_config() {
     local cfg="${KERNEL_SRC}/.config"
     local warnings=0

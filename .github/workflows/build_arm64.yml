@@ -190,32 +190,101 @@ jobs:
           echo "Source ready: /var/tmp/kernel-build/linux-${KERNEL_FULL}"
 
       # --------------------------------------------------------
+      # Clone external patch/config source (hexdump0815)
+      # URL is read from ARM64_EXTERNAL_REPO_URL in kernel_versions.conf.
+      # Cloned into /var/tmp/arm64-external-src so the Apply patches and
+      # Merge kernel config steps can consume it.
+      # --------------------------------------------------------
+      - name: Clone external patch/config source
+        if: steps.check_filter.outputs.skip != 'true'
+        env:
+          KERNEL_SERIES: ${{ needs.resolve-version.outputs.kernel_series }}
+        run: |
+          EXT_URL=$(grep "^ARM64_EXTERNAL_REPO_URL=" configs/kernel_versions.conf \
+                    | cut -d= -f2-)
+          if [[ -z "$EXT_URL" ]]; then
+            echo "ARM64_EXTERNAL_REPO_URL not set - skipping external clone"
+            echo "ARM64_EXT_DIR=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          EXT_DIR="/var/tmp/arm64-external-src"
+          echo "Cloning $EXT_URL into $EXT_DIR ..."
+          git clone --depth=1 "$EXT_URL" "$EXT_DIR"
+          echo "ARM64_EXT_DIR=${EXT_DIR}" >> "$GITHUB_ENV"
+
+          # Verify the patch subdir for this series exists
+          PATCH_SUBDIR="${EXT_DIR}/misc.cbm/patches/v${KERNEL_SERIES}"
+          if [[ -d "$PATCH_SUBDIR" ]]; then
+            COUNT=$(find "$PATCH_SUBDIR" -name '*.patch' | wc -l)
+            echo "External patch dir: $PATCH_SUBDIR ($COUNT patches)"
+          else
+            echo "WARNING: $PATCH_SUBDIR not found in cloned repo"
+            echo "  Available patch dirs:"
+            find "${EXT_DIR}/misc.cbm/patches" -maxdepth 1 -type d | sort || true
+          fi
+
+      # --------------------------------------------------------
       # Apply patches
+      # Sources (applied in order):
+      #   1. External repo: misc.cbm/patches/v${SERIES}/mt8183*.patch
+      #      (then mt81xx*.patch for cross-SoC fixes)
+      #   2. Local repo:    patches/<platform>/*.patch
+      #      (device-specific overrides - can be empty)
       # --------------------------------------------------------
       - name: Apply patches
         if: steps.check_filter.outputs.skip != 'true'
         env:
-          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+          KERNEL_FULL:   ${{ needs.resolve-version.outputs.kernel_full }}
+          KERNEL_SERIES: ${{ needs.resolve-version.outputs.kernel_series }}
         run: |
           sudo chown -R "$USER:$USER" "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
-          PATCH_DIR="patches/${{ matrix.platform }}"
           SRCDIR="/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           cd "$SRCDIR"
-          if [[ -d "${GITHUB_WORKSPACE}/${PATCH_DIR}" ]]; then
-            shopt -s nullglob
-            patches=("${GITHUB_WORKSPACE}/${PATCH_DIR}"/*.patch)
-            if [[ ${#patches[@]} -gt 0 ]]; then
-              echo "Applying ${#patches[@]} patch(es)..."
-              for p in "${patches[@]}"; do
-                echo "  $(basename "$p")"
-                patch -p1 --forward < "$p" \
-                  || echo "WARNING: patch $(basename "$p") did not apply cleanly"
-              done
+
+          apply_patch() {
+            local p="$1"
+            echo "  $(basename "$p")"
+            patch -p1 --forward < "$p" \
+              || echo "  WARNING: $(basename "$p") did not apply cleanly (may already be applied)"
+          }
+
+          # 1. External patches from hexdump0815 repo
+          if [[ -n "$ARM64_EXT_DIR" ]]; then
+            EXT_PATCH_DIR="${ARM64_EXT_DIR}/misc.cbm/patches/v${KERNEL_SERIES}"
+            if [[ -d "$EXT_PATCH_DIR" ]]; then
+              # mt8183-specific patches first
+              shopt -s nullglob
+              ext_mt8183=("${EXT_PATCH_DIR}"/mt8183*.patch)
+              if [[ ${#ext_mt8183[@]} -gt 0 ]]; then
+                echo "==> Applying ${#ext_mt8183[@]} external mt8183 patch(es)..."
+                for p in "${ext_mt8183[@]}"; do apply_patch "$p"; done
+              fi
+              # Cross-SoC mt81xx patches
+              ext_mt81xx=("${EXT_PATCH_DIR}"/mt81xx*.patch)
+              if [[ ${#ext_mt81xx[@]} -gt 0 ]]; then
+                echo "==> Applying ${#ext_mt81xx[@]} external mt81xx patch(es)..."
+                for p in "${ext_mt81xx[@]}"; do apply_patch "$p"; done
+              fi
             else
-              echo "No patches to apply"
+              echo "WARNING: external patch dir not found: $EXT_PATCH_DIR"
             fi
           else
-            echo "No patch directory for ${{ matrix.platform }}"
+            echo "No external patch source configured"
+          fi
+
+          # 2. Local patches (device overrides in this repo)
+          LOCAL_PATCH_DIR="${GITHUB_WORKSPACE}/patches/${{ matrix.platform }}"
+          if [[ -d "$LOCAL_PATCH_DIR" ]]; then
+            shopt -s nullglob
+            local_patches=("${LOCAL_PATCH_DIR}"/*.patch)
+            if [[ ${#local_patches[@]} -gt 0 ]]; then
+              echo "==> Applying ${#local_patches[@]} local patch(es)..."
+              for p in "${local_patches[@]}"; do apply_patch "$p"; done
+            else
+              echo "No local patches for ${{ matrix.platform }}"
+            fi
+          else
+            echo "No local patch directory for ${{ matrix.platform }}"
           fi
 
       # --------------------------------------------------------
