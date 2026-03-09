@@ -67,6 +67,9 @@ cp "$BASE_CONFIG" .config
 log "Running olddefconfig to adapt base config to $(basename "$KERNEL_SRC")..."
 make ARCH=arm64 olddefconfig
 
+# Defined here so both Step 3 and Step 4 can use it
+KMERGE="${KERNEL_SRC}/scripts/kconfig/merge_config.sh"
+
 # ── Step 3: Optional external config options (hexdump0815 misc.cbm/options/) ──
 # If ARM64_EXT_DIR is set (populated by the workflow clone step), apply
 # additional-options-special.cfg and process options-to-remove-special.cfg.
@@ -126,7 +129,6 @@ fi
 
 # ── Step 4: Optional device overlay ──────────────────────────────────────────
 DEVICE_FRAG="${REPO_DIR}/configs/device/${CODENAME}.cfg"
-KMERGE="${KERNEL_SRC}/scripts/kconfig/merge_config.sh"
 
 if [[ -f "$DEVICE_FRAG" ]]; then
     log "Applying device overlay: $DEVICE_FRAG"
