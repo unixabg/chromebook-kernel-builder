@@ -20,6 +20,10 @@ on:
         description: 'Build only this platform (e.g. mediatek-mt8183), leave blank for all'
         required: false
         default: ''
+      codename_filter:
+        description: 'Build only this codename (e.g. esche), leave blank for all arm64'
+        required: false
+        default: ''
 
 jobs:
   # ============================================================
@@ -70,77 +74,135 @@ jobs:
           echo "kernel_full=$FULL" >> "$GITHUB_OUTPUT"
 
   # ============================================================
-  # Build matrix - one job per platform
+  # Generate build matrix from hardware_map.conf (arch=arm64)
+  #
+  # hardware_map.conf format:
+  #   CODENAME|PLATFORM|KERNEL_SERIES|PATCH_DIR|ARCH|NOTES
+  #
+  # Field 5 (ARCH) must be "arm64" to be included here.
+  # Existing x86_64 entries (5 fields or ARCH=x86_64) are ignored.
   # ============================================================
-  build:
-    name: Build ${{ matrix.platform }}
+  generate-matrix:
+    name: Generate build matrix
+    runs-on: ubuntu-24.04
     needs: resolve-version
-    runs-on: ubuntu-24.04-arm   # native arm64 - no cross-compile needed
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: mediatek-mt8183
-            codename: esche
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+      skip:   ${{ steps.gen.outputs.skip }}
 
     steps:
-      - name: Check platform filter
-        id: check_filter
-        run: |
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            FILTER="${{ github.event.inputs.platform_filter }}"
-            if [[ -z "$FILTER" || "$FILTER" == "all" || "$FILTER" == "${{ matrix.platform }}" ]]; then
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-            fi
-            exit 0
-          fi
-
-          # push: require [build:arm64], [build:mediatek-mt8183], or [build:all]
-          COMMIT_MSG="${{ github.event.head_commit.message }}"
-          BUILD_TAG=$(echo "$COMMIT_MSG" | grep -oP '(?<=\[build:)[^\]]+' || true)
-
-          if [[ -z "$BUILD_TAG" ]]; then
-            echo "No [build:*] tag in commit message - skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$BUILD_TAG" == "all" \
-               || "$BUILD_TAG" == "arm64" \
-               || "$BUILD_TAG" == "${{ matrix.platform }}" ]]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Skip if not targeted
-        if: steps.check_filter.outputs.skip == 'true'
-        run: echo "Skipping ${{ matrix.platform }} - not targeted by this build"
-
       - name: Checkout
-        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/checkout@v4
 
-      # --------------------------------------------------------
-      # Cache kernel tarball - keyed by full version
-      # --------------------------------------------------------
+      - name: Check push trigger
+        id: push_check
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            COMMIT_MSG="${{ github.event.head_commit.message }}"
+            BUILD_TAG=$(echo "$COMMIT_MSG" | grep -oP '(?<=\[build:)[^\]]+' || true)
+            echo "build_tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_tag=all" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate matrix from hardware_map.conf
+        id: gen
+        env:
+          BUILD_TAG:       ${{ steps.push_check.outputs.build_tag }}
+          PLATFORM_FILTER: ${{ github.event.inputs.platform_filter }}
+          CODENAME_FILTER: ${{ github.event.inputs.codename_filter }}
+          KERNEL_SERIES:   ${{ needs.resolve-version.outputs.kernel_series }}
+        run: |
+          # On push, require [build:arm64], [build:all], or [build:<platform>/<codename>] tag
+          if [[ "${{ github.event_name }}" == "push" && -z "$BUILD_TAG" ]]; then
+            echo "No [build:*] tag in commit message - skipping arm64 build"
+            echo "skip=true"  >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Parse hardware_map.conf for arm64 entries
+          ENTRIES=()
+          while IFS='|' read -r codename platform series patch_dir arch notes; do
+            # Skip comments and blank lines
+            [[ -z "$codename" || "$codename" == \#* ]] && continue
+            # Trim whitespace
+            codename="${codename// /}"; codename="${codename%%#*}"
+            platform="${platform// /}"
+            series="${series// /}"
+            patch_dir="${patch_dir// /}"
+            arch="${arch// /}"
+            # Only arm64
+            [[ "$arch" != "arm64" ]] && continue
+            # Resolve "default" series
+            [[ "$series" == "default" ]] && series="$KERNEL_SERIES"
+            ENTRIES+=("${codename}|${platform}|${series}|${patch_dir}")
+          done < configs/hardware_map.conf
+
+          if [[ ${#ENTRIES[@]} -eq 0 ]]; then
+            echo "ERROR: No arm64 entries found in hardware_map.conf"
+            echo "  Add entries with arm64 in field 5, e.g.:"
+            echo "  esche|mediatek-mt8183|default|none|arm64|HP Chromebook 11MK G9 EE"
+            exit 1
+          fi
+
+          # Build JSON matrix with optional filters
+          JSON='{"include":['
+          FIRST=true
+          for entry in "${ENTRIES[@]}"; do
+            IFS='|' read -r codename platform series patch_dir <<< "$entry"
+
+            # push filter
+            if [[ "${{ github.event_name }}" == "push" ]]; then
+              if [[ "$BUILD_TAG" != "all" && "$BUILD_TAG" != "arm64" \
+                    && "$BUILD_TAG" != "$platform" && "$BUILD_TAG" != "$codename" ]]; then
+                continue
+              fi
+            fi
+
+            # workflow_dispatch filters
+            if [[ -n "$PLATFORM_FILTER" && "$PLATFORM_FILTER" != "all" \
+                  && "$PLATFORM_FILTER" != "$platform" ]]; then
+              continue
+            fi
+            if [[ -n "$CODENAME_FILTER" && "$CODENAME_FILTER" != "all" \
+                  && "$CODENAME_FILTER" != "$codename" ]]; then
+              continue
+            fi
+
+            [[ "$FIRST" == "true" ]] && FIRST=false || JSON+=','
+            JSON+="{\"codename\":\"${codename}\",\"platform\":\"${platform}\","
+            JSON+="\"kernel_series\":\"${series}\",\"patch_dir\":\"${patch_dir}\"}"
+          done
+          JSON+=']}'
+
+          echo "Matrix: $JSON"
+          echo "matrix=$JSON" >> "$GITHUB_OUTPUT"
+          echo "skip=false"   >> "$GITHUB_OUTPUT"
+
+  # ============================================================
+  # Build - one job per device
+  # ============================================================
+  build:
+    name: Build ${{ matrix.codename }} (${{ matrix.platform }})
+    needs: [ resolve-version, generate-matrix ]
+    if: needs.generate-matrix.outputs.skip != 'true'
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Cache kernel tarball
-        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: /var/tmp/kernel-tarballs
           key: kernel-tarball-arm64-${{ needs.resolve-version.outputs.kernel_full }}
 
-      # --------------------------------------------------------
-      # Cache ccache - keyed by platform + series
-      # --------------------------------------------------------
       - name: Cache ccache
-        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.ccache
@@ -149,11 +211,7 @@ jobs:
             ccache-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_series }}.
             ccache-${{ matrix.platform }}-
 
-      # --------------------------------------------------------
-      # Install build dependencies
-      # --------------------------------------------------------
       - name: Install build dependencies
-        if: steps.check_filter.outputs.skip != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -161,16 +219,9 @@ jobs:
             libssl-dev libelf-dev libncurses-dev \
             libdw-dev dwarves pahole \
             kmod wget curl git xz-utils \
-            ccache \
-            liblz4-tool \
-            u-boot-tools \
-            vboot-kernel-utils
+            ccache liblz4-tool u-boot-tools vboot-kernel-utils
 
-      # --------------------------------------------------------
-      # Download kernel source (uses cache if available)
-      # --------------------------------------------------------
       - name: Download kernel source
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -184,118 +235,97 @@ jobs:
           else
             echo "Using cached tarball"
           fi
-          echo "Extracting..."
           mkdir -p /var/tmp/kernel-build
           tar -xf "$TARBALL" -C /var/tmp/kernel-build
-          echo "Source ready: /var/tmp/kernel-build/linux-${KERNEL_FULL}"
 
       # --------------------------------------------------------
-      # Clone external patch/config source (hexdump0815)
-      # URL is read from ARM64_EXTERNAL_REPO_URL in kernel_versions.conf.
-      # Cloned into /var/tmp/arm64-external-src so the Apply patches and
-      # Merge kernel config steps can consume it.
+      # Clone external patch/config source
+      # ARM64_EXTERNAL_REPO_URL in kernel_versions.conf points to
+      # hexdump0815 (or any contributor's upstream patch repo).
       # --------------------------------------------------------
       - name: Clone external patch/config source
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_SERIES: ${{ needs.resolve-version.outputs.kernel_series }}
         run: |
           EXT_URL=$(grep "^ARM64_EXTERNAL_REPO_URL=" configs/kernel_versions.conf \
                     | cut -d= -f2-)
           if [[ -z "$EXT_URL" ]]; then
-            echo "ARM64_EXTERNAL_REPO_URL not set - skipping external clone"
+            echo "ARM64_EXTERNAL_REPO_URL not set - skipping"
             echo "ARM64_EXT_DIR=" >> "$GITHUB_ENV"
             exit 0
           fi
           EXT_DIR="/var/tmp/arm64-external-src"
-          echo "Cloning $EXT_URL into $EXT_DIR ..."
           git clone --depth=1 "$EXT_URL" "$EXT_DIR"
           echo "ARM64_EXT_DIR=${EXT_DIR}" >> "$GITHUB_ENV"
 
-          # Verify the patch subdir for this series exists
           PATCH_SUBDIR="${EXT_DIR}/misc.cbm/patches/v${KERNEL_SERIES}"
           if [[ -d "$PATCH_SUBDIR" ]]; then
             COUNT=$(find "$PATCH_SUBDIR" -name '*.patch' | wc -l)
             echo "External patch dir: $PATCH_SUBDIR ($COUNT patches)"
           else
-            echo "WARNING: $PATCH_SUBDIR not found in cloned repo"
-            echo "  Available patch dirs:"
+            echo "WARNING: $PATCH_SUBDIR not found"
             find "${EXT_DIR}/misc.cbm/patches" -maxdepth 1 -type d | sort || true
           fi
 
       # --------------------------------------------------------
       # Apply patches
-      # Sources (applied in order):
-      #   1. External repo: misc.cbm/patches/v${SERIES}/mt8183*.patch
-      #      (then mt81xx*.patch for cross-SoC fixes)
-      #   2. Local repo:    patches/<platform>/*.patch
-      #      (device-specific overrides - can be empty)
+      # 1. External upstream (hexdump0815 et al.)
+      # 2. Local patches/<patch_dir>/*.patch (contributor overrides)
+      #    patch_dir comes from hardware_map.conf field 4.
+      #    Use "none" if no local patches needed.
+      # See patches/<platform>/README.md for guidance.
       # --------------------------------------------------------
       - name: Apply patches
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL:   ${{ needs.resolve-version.outputs.kernel_full }}
           KERNEL_SERIES: ${{ needs.resolve-version.outputs.kernel_series }}
+          PATCH_DIR:     ${{ matrix.patch_dir }}
         run: |
           sudo chown -R "$USER:$USER" "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
-          SRCDIR="/var/tmp/kernel-build/linux-${KERNEL_FULL}"
-          cd "$SRCDIR"
+          cd "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
 
           apply_patch() {
-            local p="$1"
-            echo "  $(basename "$p")"
-            patch -p1 --forward < "$p" \
-              || echo "  WARNING: $(basename "$p") did not apply cleanly (may already be applied)"
+            echo "  $(basename "$1")"
+            patch -p1 --forward < "$1" \
+              || echo "  WARNING: $(basename "$1") did not apply cleanly"
           }
 
-          # 1. External patches from hexdump0815 repo
+          # 1. External patches
           if [[ -n "$ARM64_EXT_DIR" ]]; then
             EXT_PATCH_DIR="${ARM64_EXT_DIR}/misc.cbm/patches/v${KERNEL_SERIES}"
             if [[ -d "$EXT_PATCH_DIR" ]]; then
-              # mt8183-specific patches first
               shopt -s nullglob
               ext_mt8183=("${EXT_PATCH_DIR}"/mt8183*.patch)
-              if [[ ${#ext_mt8183[@]} -gt 0 ]]; then
-                echo "==> Applying ${#ext_mt8183[@]} external mt8183 patch(es)..."
+              [[ ${#ext_mt8183[@]} -gt 0 ]] && \
+                echo "==> ${#ext_mt8183[@]} external mt8183 patch(es)..." && \
                 for p in "${ext_mt8183[@]}"; do apply_patch "$p"; done
-              fi
-              # Cross-SoC mt81xx patches
               ext_mt81xx=("${EXT_PATCH_DIR}"/mt81xx*.patch)
-              if [[ ${#ext_mt81xx[@]} -gt 0 ]]; then
-                echo "==> Applying ${#ext_mt81xx[@]} external mt81xx patch(es)..."
+              [[ ${#ext_mt81xx[@]} -gt 0 ]] && \
+                echo "==> ${#ext_mt81xx[@]} external mt81xx patch(es)..." && \
                 for p in "${ext_mt81xx[@]}"; do apply_patch "$p"; done
-              fi
             else
               echo "WARNING: external patch dir not found: $EXT_PATCH_DIR"
             fi
-          else
-            echo "No external patch source configured"
           fi
 
-          # 2. Local patches (device overrides in this repo)
-          LOCAL_PATCH_DIR="${GITHUB_WORKSPACE}/patches/${{ matrix.platform }}"
-          if [[ -d "$LOCAL_PATCH_DIR" ]]; then
-            shopt -s nullglob
-            local_patches=("${LOCAL_PATCH_DIR}"/*.patch)
-            if [[ ${#local_patches[@]} -gt 0 ]]; then
-              echo "==> Applying ${#local_patches[@]} local patch(es)..."
-              for p in "${local_patches[@]}"; do apply_patch "$p"; done
+          # 2. Local contributor patches
+          if [[ "$PATCH_DIR" != "none" && -n "$PATCH_DIR" ]]; then
+            LOCAL_DIR="${GITHUB_WORKSPACE}/patches/${PATCH_DIR}"
+            if [[ -d "$LOCAL_DIR" ]]; then
+              shopt -s nullglob
+              local_patches=("${LOCAL_DIR}"/*.patch)
+              if [[ ${#local_patches[@]} -gt 0 ]]; then
+                echo "==> ${#local_patches[@]} local patch(es) from patches/${PATCH_DIR}..."
+                for p in "${local_patches[@]}"; do apply_patch "$p"; done
+              else
+                echo "No *.patch files in patches/${PATCH_DIR}"
+              fi
             else
-              echo "No local patches for ${{ matrix.platform }}"
+              echo "WARNING: patches/${PATCH_DIR} not found"
             fi
-          else
-            echo "No local patch directory for ${{ matrix.platform }}"
           fi
 
-      # --------------------------------------------------------
-      # Merge kernel config
-      # Picks the best available mainline MT8183 defconfig
-      # (mt8183_defconfig > mediatek_defconfig > defconfig), runs
-      # olddefconfig, then applies any device overlay.
-      # The verify step logs warnings for any missing MT8183 options.
-      # --------------------------------------------------------
       - name: Merge kernel config
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -305,19 +335,13 @@ jobs:
             --platform   "${{ matrix.platform }}" \
             --codename   "${{ matrix.codename }}"
 
-      # --------------------------------------------------------
-      # Build kernel
-      # --------------------------------------------------------
       - name: Build kernel
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
           export CCACHE_DIR=~/.ccache
           ccache -s
-
           LOCAL_VERSION="-chromebook-${{ matrix.platform }}-velvet-os"
-
           cd "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           time make ARCH=arm64 \
             CC="ccache gcc" \
@@ -325,20 +349,27 @@ jobs:
             INSTALL_MOD_STRIP=1 \
             -j$(nproc) \
             Image dtbs modules
-
           ccache -s
           echo "LOCAL_VERSION=${LOCAL_VERSION}" >> "$GITHUB_ENV"
 
       # --------------------------------------------------------
-      # Package tar.gz (stage, FIT image, vbutil sign, tar)
+      # Package
+      # Cmdline lookup order (first match wins):
+      #   configs/cmdline/<codename>.cmdline
+      #   configs/cmdline/<platform>.cmdline
+      #   configs/cmdline/chromebook-kukui.cmdline
+      # Contributors: add configs/cmdline/<codename>.cmdline if
+      # your device needs different kernel parameters.
       # --------------------------------------------------------
       - name: Package tar.gz
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
           KSRC="/var/tmp/kernel-build/linux-${KERNEL_FULL}"
-          kver=$(make -C "$KSRC" ARCH=arm64 LOCALVERSION="${LOCAL_VERSION}" --no-print-directory kernelrelease)
+          CODENAME="${{ matrix.codename }}"
+          PLATFORM="${{ matrix.platform }}"
+          kver=$(make -C "$KSRC" ARCH=arm64 LOCALVERSION="${LOCAL_VERSION}" \
+                 --no-print-directory kernelrelease)
           echo "Packaging: $kver"
 
           STAGE=$(mktemp -d)
@@ -346,9 +377,7 @@ jobs:
           mkdir -p "${BOOT}"
 
           make -C "$KSRC" ARCH=arm64 \
-            INSTALL_MOD_PATH="${STAGE}" \
-            INSTALL_MOD_STRIP=1 \
-            modules_install
+            INSTALL_MOD_PATH="${STAGE}" INSTALL_MOD_STRIP=1 modules_install
 
           cp "${KSRC}/.config"               "${BOOT}/config-${kver}"
           cp "${KSRC}/arch/arm64/boot/Image" "${BOOT}/Image-${kver}"
@@ -357,50 +386,56 @@ jobs:
           mkdir -p "${BOOT}/dtb-${kver}"
           cp "${KSRC}"/arch/arm64/boot/dts/mediatek/mt8183-kukui-*.dtb \
              "${BOOT}/dtb-${kver}/"
-
           DTB_COUNT=$(find "${BOOT}/dtb-${kver}" -name '*.dtb' | wc -l)
           echo "Staged ${DTB_COUNT} DTB(s)"
           [[ "$DTB_COUNT" -eq 0 ]] && { echo "ERROR: no DTBs produced"; exit 1; }
 
-          # lz4 compress Image
           lz4 -f "${BOOT}/Image-${kver}" "${STAGE}/Image.lz4"
-
-          # Empty bootloader stub required by vbutil_kernel
           dd if=/dev/zero of="${STAGE}/bootloader.bin" bs=512 count=1 2>/dev/null
 
-          # Collect DTBs for mkimage
           DTB_ARGS=()
           while IFS= read -r -d '' dtb; do
             DTB_ARGS+=(-b "$dtb")
           done < <(find "${BOOT}/dtb-${kver}" -name '*.dtb' -print0 | sort -z)
 
-          # FIT image: lz4 Image + all kukui DTBs
           mkimage \
             -D "-I dts -O dtb -p 2048" \
             -f auto -A arm64 -O linux -T kernel -C lz4 -a 0 \
-            -d "${STAGE}/Image.lz4" \
-            "${DTB_ARGS[@]}" \
+            -d "${STAGE}/Image.lz4" "${DTB_ARGS[@]}" \
             "${STAGE}/kernel.itb"
 
-          # Sign with ChromeOS developer keys
+          # Cmdline lookup
+          CMDLINE_FILE=""
+          for candidate in \
+              "configs/cmdline/${CODENAME}.cmdline" \
+              "configs/cmdline/${PLATFORM}.cmdline" \
+              "configs/cmdline/chromebook-kukui.cmdline"; do
+            if [[ -f "$candidate" ]]; then
+              CMDLINE_FILE="$candidate"
+              echo "Using cmdline: $CMDLINE_FILE"
+              break
+            fi
+          done
+          [[ -z "$CMDLINE_FILE" ]] && \
+            { echo "ERROR: no cmdline found for ${CODENAME} or ${PLATFORM}"; exit 1; }
+
           vbutil_kernel \
             --pack "${BOOT}/vmlinux.kpart-${kver}" \
             --keyblock    /usr/share/vboot/devkeys/kernel.keyblock \
             --signprivate /usr/share/vboot/devkeys/kernel_data_key.vbprivk \
             --version 1 \
-            --config      configs/cmdline/chromebook-kukui.cmdline \
+            --config      "${CMDLINE_FILE}" \
             --bootloader  "${STAGE}/bootloader.bin" \
             --vmlinuz     "${STAGE}/kernel.itb" \
             --arch arm
 
-          # Verify before packaging
           vbutil_kernel \
             --verify "${BOOT}/vmlinux.kpart-${kver}" \
             --signpubkey /usr/share/vboot/devkeys/kernel_subkey.vbpubk
 
           mkdir -p output
           BUILD_DATE=$(date +%Y%m%d)
-          TARBALL="output/${kver}-velvet-os-${BUILD_DATE}.tar.gz"
+          TARBALL="output/${kver}-${CODENAME}-velvet-os-${BUILD_DATE}.tar.gz"
           tar czf "${TARBALL}" \
             -C "${STAGE}" \
             "boot/Image-${kver}" \
@@ -409,32 +444,29 @@ jobs:
             "boot/dtb-${kver}" \
             "boot/vmlinux.kpart-${kver}" \
             "lib/modules/${kver}"
-
-          cp "${KSRC}/.config" "output/config.${kver}-velvet-os-${BUILD_DATE}"
+          cp "${KSRC}/.config" "output/config.${kver}-${CODENAME}-velvet-os-${BUILD_DATE}"
           rm -rf "${STAGE}"
-
-          echo "Output:"
           ls -lh output/
 
-      # --------------------------------------------------------
-      # Upload artifacts
-      # --------------------------------------------------------
       - name: Upload artifacts
-        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_full }}
+          name: kernel-${{ matrix.codename }}-${{ needs.resolve-version.outputs.kernel_full }}
           path: output/
           retention-days: 30
 
   # ============================================================
-  # Release - only on schedule or workflow_dispatch
+  # Release - schedule or workflow_dispatch only
   # ============================================================
   release:
     name: Create release
-    needs: [ resolve-version, build ]
+    needs: [ resolve-version, generate-matrix, build ]
     runs-on: ubuntu-24.04
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: |
+      always() &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      needs.resolve-version.result == 'success' &&
+      needs.generate-matrix.outputs.skip != 'true'
 
     steps:
       - name: Checkout
@@ -447,8 +479,22 @@ jobs:
           pattern: kernel-*
           merge-multiple: true
 
-      - name: Show release contents
-        run: ls -lh release-files/
+      - name: Check for partial failures
+        id: build_status
+        run: |
+          if [[ "${{ needs.build.result }}" == "failure" ]]; then
+            echo "partial_failure=true" >> "$GITHUB_OUTPUT"
+            echo "WARNING: one or more device builds failed - releasing successful builds only"
+          else
+            echo "partial_failure=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [[ -z "$(ls -A release-files 2>/dev/null)" ]]; then
+            echo "ERROR: no artifacts to release - all builds failed"
+            exit 1
+          fi
+
+          ls -lh release-files/
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -461,22 +507,20 @@ jobs:
             Kernel version: **linux-${{ needs.resolve-version.outputs.kernel_full }}**
             Built: ${{ github.run_id }}
 
-            Base config: mainline kernel defconfig (mt8183_defconfig or mediatek_defconfig if available, else arm64 defconfig + device overlay)
+            ${{ steps.build_status.outputs.partial_failure == 'true' && '> ⚠️ **Partial build** — one or more devices failed. Check the [Actions run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details. Only successful device builds are attached below.' || '' }}
 
-            ### Platforms
-            | Tarball | SoC | Boards |
-            |---|---|---|
-            | *-chromebook-mediatek-mt8183-velvet-os-YYYYMMDD.tar.gz | MT8183 | HP 11MK G9 EE (esche), Acer 311, Lenovo Duet, Lenovo 10e |
+            Devices are driven by `configs/hardware_map.conf` (arch=arm64 entries).
 
             ### Installation
-            ```bash
+```bash
             sudo tar xzf <tarball>.tar.gz -C /
             KERN=$(cgpt find -t kernel /dev/mmcblk1 | head -1)
             sudo dd if=/boot/vmlinux.kpart-<kver> of="${KERN}" bs=4M
             sudo cgpt add -i "${KERN##*p}" -P 15 -T 1 -S 1 /dev/mmcblk1
             sudo reboot
-            ```
+```
           files: release-files/*
           make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
