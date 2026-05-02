@@ -43,7 +43,20 @@ jobs:
       - name: Resolve kernel version
         id: resolve
         run: |
-          if [[ -n "${{ github.event.inputs.kernel_version }}" ]]; then
+          # Priority order:
+          #   1. [kernel:x.y.z] or [kernel:x.y] tag in commit message
+          #   2. workflow_dispatch kernel_version input
+          #   3. DEFAULT_SERIES_ARM64 from kernel_versions.conf
+          KERNEL_TAG=""
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            KERNEL_TAG=$(echo '${{ toJson(github.event.commits) }}' | \
+              grep -oP '(?<=\[kernel:)[^\]]+' | head -1 || true)
+            [[ -n "$KERNEL_TAG" ]] && echo "Kernel override from commit tag: $KERNEL_TAG"
+          fi
+
+          if [[ -n "$KERNEL_TAG" ]]; then
+            SERIES="$KERNEL_TAG"
+          elif [[ -n "${{ github.event.inputs.kernel_version }}" ]]; then
             SERIES="${{ github.event.inputs.kernel_version }}"
           else
             SERIES=$(grep "^DEFAULT_SERIES_ARM64=" configs/kernel_versions.conf \
@@ -65,6 +78,12 @@ jobs:
             grep "^${SERIES}\." | \
             sort -t. -k1,1n -k2,2n -k3,3n | \
             tail -1)
+
+          # If SERIES was a full version (e.g. 6.12.80), use it directly
+          if [[ -z "$FULL" && "$SERIES" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            FULL="$SERIES"
+            echo "Using exact version from tag: $FULL"
+          fi
 
           if [[ -z "$FULL" ]]; then
             echo "ERROR: Could not resolve latest ${SERIES}.x from kernel.org"
@@ -100,9 +119,14 @@ jobs:
           if [[ "${{ github.event_name }}" == "push" ]]; then
             BUILD_TAG=$(echo '${{ toJson(github.event.commits) }}' | \
               grep -oP '(?<=\[build:)[^\]]+' | head -1 || true)
-            echo "build_tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
+            KERNEL_TAG=$(echo '${{ toJson(github.event.commits) }}' | \
+              grep -oP '(?<=\[kernel:)[^\]]+' | head -1 || true)
+            echo "build_tag=${BUILD_TAG}"   >> "$GITHUB_OUTPUT"
+            echo "kernel_tag=${KERNEL_TAG}" >> "$GITHUB_OUTPUT"
+            [[ -n "$KERNEL_TAG" ]] && echo "Kernel tag found: $KERNEL_TAG"
           else
-            echo "build_tag=all" >> "$GITHUB_OUTPUT"
+            echo "build_tag=all"  >> "$GITHUB_OUTPUT"
+            echo "kernel_tag="    >> "$GITHUB_OUTPUT"
           fi
 
       - name: Generate matrix from hardware_map.conf
