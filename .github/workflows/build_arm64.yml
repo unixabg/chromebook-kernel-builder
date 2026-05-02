@@ -50,7 +50,7 @@ jobs:
           KERNEL_TAG=""
           if [[ "${{ github.event_name }}" == "push" ]]; then
             KERNEL_TAG=$(echo '${{ toJson(github.event.commits) }}' | \
-              grep -oP '(?<=\[kernel:)[^\]]+' | head -1 || true)
+              grep -oP '(?<=\[kernel:)[0-9]+\.[0-9]+(\.[0-9]+)?(?=\])' | head -1 || true)
             [[ -n "$KERNEL_TAG" ]] && echo "Kernel override from commit tag: $KERNEL_TAG"
           fi
 
@@ -120,7 +120,7 @@ jobs:
             BUILD_TAG=$(echo '${{ toJson(github.event.commits) }}' | \
               grep -oP '(?<=\[build:)[^\]]+' | head -1 || true)
             KERNEL_TAG=$(echo '${{ toJson(github.event.commits) }}' | \
-              grep -oP '(?<=\[kernel:)[^\]]+' | head -1 || true)
+              grep -oP '(?<=\[kernel:)[0-9]+\.[0-9]+(\.[0-9]+)?(?=\])' | head -1 || true)
             echo "build_tag=${BUILD_TAG}"   >> "$GITHUB_OUTPUT"
             echo "kernel_tag=${KERNEL_TAG}" >> "$GITHUB_OUTPUT"
             [[ -n "$KERNEL_TAG" ]] && echo "Kernel tag found: $KERNEL_TAG"
