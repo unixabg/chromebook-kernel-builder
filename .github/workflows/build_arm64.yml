@@ -496,11 +496,17 @@ jobs:
 
           ls -lh release-files/
 
+      - name: Get build date
+        id: date
+        run: echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.resolve-version.outputs.kernel_full }}-chromebook-arm64
-          name: "ARM64 Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }}"
+          tag_name: ${{ needs.resolve-version.outputs.kernel_full }}-chromebook-arm64-${{ steps.date.outputs.date }}
+          name: "ARM64 Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }} (${{ steps.date.outputs.date }})"
+          prerelease: true
+          make_latest: false
           body: |
             ## ARM64 Chromebook Kernels
 
@@ -512,15 +518,14 @@ jobs:
             Devices are driven by `configs/hardware_map.conf` (arch=arm64 entries).
 
             ### Installation
-```bash
+            ```bash
             sudo tar xzf <tarball>.tar.gz -C /
             KERN=$(cgpt find -t kernel /dev/mmcblk1 | head -1)
             sudo dd if=/boot/vmlinux.kpart-<kver> of="${KERN}" bs=4M
             sudo cgpt add -i "${KERN##*p}" -P 15 -T 1 -S 1 /dev/mmcblk1
             sudo reboot
-```
+            ```
           files: release-files/*
-          make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
