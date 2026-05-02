@@ -1,0 +1,126 @@
+name: Device Support
+description: Report a tested device or request support for a new board
+title: "[Device] <codename> — <Full Device Name>"
+labels: ["device-support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! Fill in as much as you can — partial reports are still useful.
+        If you have a working config ready to merge, consider opening a Pull Request instead.
+
+  - type: input
+    id: codename
+    attributes:
+      label: Board codename
+      description: The ChromeOS board codename — run `cat /sys/firmware/devicetree/base/compatible` or check [chromiumos.github.io/chrome-os-partner-pages](https://chromiumos.github.io/chrome-os-partner-pages/)
+      placeholder: esche
+    validations:
+      required: true
+
+  - type: input
+    id: device_name
+    attributes:
+      label: Full device name
+      description: Make and model of the Chromebook
+      placeholder: HP Chromebook 11MK G9 EE
+    validations:
+      required: true
+
+  - type: dropdown
+    id: arch
+    attributes:
+      label: Architecture
+      options:
+        - x86_64
+        - arm64
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform / SoC
+      description: e.g. mediatek-mt8183, amd-stoneyridge, intel-cometlake
+      placeholder: mediatek-mt8183
+    validations:
+      required: true
+
+  - type: input
+    id: kernel_version
+    attributes:
+      label: Kernel version tested
+      description: Full kernel version from `uname -r`
+      placeholder: 6.19.6-chromebook-mediatek-mt8183-velvet-os
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS / distribution
+      options:
+        - velvet-os
+        - Debian
+        - Ubuntu
+        - Arch Linux
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: what_works
+    attributes:
+      label: What works?
+      description: Check everything you have confirmed working
+      options:
+        - label: Boots successfully
+        - label: WiFi
+        - label: Bluetooth
+        - label: Display / backlight
+        - label: Keyboard and touchpad
+        - label: USB ports
+        - label: Audio (speakers)
+        - label: Audio (microphone)
+        - label: Suspend / resume
+        - label: Camera
+
+  - type: textarea
+    id: what_doesnt_work
+    attributes:
+      label: What doesn't work or is untested?
+      placeholder: "Audio not tested. Suspend causes a kernel panic."
+
+  - type: textarea
+    id: hardware_map
+    attributes:
+      label: hardware_map.conf entry
+      description: |
+        The line you added or would add to configs/hardware_map.conf.
+        Format: CODENAME|PLATFORM|KERNEL_SERIES|PATCH_DIR|ARCH|NOTES
+        Use "default" for KERNEL_SERIES unless your board needs a specific series.
+        Use "none" for PATCH_DIR if no local patches are needed.
+      render: shell
+      placeholder: esche|mediatek-mt8183|default|none|arm64|HP Chromebook 11MK G9 EE
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Device config (configs/device/<codename>.cfg)
+      description: Paste your device config overrides here, or leave blank if the platform default works as-is
+      render: shell
+
+  - type: textarea
+    id: arm64_notes
+    attributes:
+      label: ARM64 notes (arm64 devices only)
+      description: Which DTB did you use? Did you need any cmdline changes? Any issues with the vbutil signing or kpart?
+      placeholder: "Used mt8183-kukui-esche.dtb. No cmdline changes needed. vbutil signed correctly."
+
+  - type: textarea
+    id: additional_notes
+    attributes:
+      label: Any other notes
+      placeholder: "Boot logs, dmesg snippets, workarounds tried, links to related issues, etc."
