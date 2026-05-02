@@ -98,8 +98,8 @@ jobs:
         id: push_check
         run: |
           if [[ "${{ github.event_name }}" == "push" ]]; then
-            COMMIT_MSG="${{ github.event.head_commit.message }}"
-            BUILD_TAG=$(echo "$COMMIT_MSG" | grep -oP '(?<=\[build:)[^\]]+' || true)
+            BUILD_TAG=$(echo '${{ toJson(github.event.commits) }}' | \
+              grep -oP '(?<=\[build:)[^\]]+' | head -1 || true)
             echo "build_tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
           else
             echo "build_tag=all" >> "$GITHUB_OUTPUT"

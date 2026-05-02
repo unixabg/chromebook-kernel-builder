@@ -120,8 +120,8 @@ jobs:
           fi
 
           # push: require [build:target] or [build:all] in commit message
-          COMMIT_MSG="${{ github.event.head_commit.message }}"
-          BUILD_TAG=$(echo "$COMMIT_MSG" | grep -oP '(?<=\[build:)[^\]]+' || true)
+          BUILD_TAG=$(echo '${{ toJson(github.event.commits) }}' | \
+            grep -oP '(?<=\[build:)[^\]]+' | head -1 || true)
 
           if [[ -z "$BUILD_TAG" ]]; then
             echo "No [build:*] tag in commit message - skipping"
