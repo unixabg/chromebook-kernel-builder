@@ -485,8 +485,10 @@ jobs:
           if [[ "${{ needs.build.result }}" == "failure" ]]; then
             echo "partial_failure=true" >> "$GITHUB_OUTPUT"
             echo "WARNING: one or more device builds failed - releasing successful builds only"
+            echo "PARTIAL_WARNING=⚠️ **Partial build** — one or more devices failed. Check the [Actions run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details. Only successful device builds are attached below." >> "$GITHUB_ENV"
           else
             echo "partial_failure=false" >> "$GITHUB_OUTPUT"
+            echo "PARTIAL_WARNING=" >> "$GITHUB_ENV"
           fi
 
           if [[ -z "$(ls -A release-files 2>/dev/null)" ]]; then
@@ -513,7 +515,7 @@ jobs:
             Kernel version: **linux-${{ needs.resolve-version.outputs.kernel_full }}**
             Built: ${{ github.run_id }}
 
-            ${{ steps.build_status.outputs.partial_failure == 'true' && '> ⚠️ **Partial build** — one or more devices failed. Check the [Actions run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details. Only successful device builds are attached below.' || '' }}
+            ${{ env.PARTIAL_WARNING }}
 
             Devices are driven by `configs/hardware_map.conf` (arch=arm64 entries).
 
