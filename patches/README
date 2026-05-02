@@ -1,0 +1,7 @@
+Patches for this platform are sourced automatically at build time from:
+  ARM64_EXTERNAL_REPO_URL (configs/kernel_versions.conf)
+  → misc.cbm/patches/v<series>/mt8183*.patch
+  → misc.cbm/patches/v<series>/mt81xx*.patch
+
+Place any local device-specific overrides here as *.patch files
+if you ever need something not covered by the upstream repo.
