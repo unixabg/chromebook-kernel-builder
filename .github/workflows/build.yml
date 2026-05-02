@@ -17,7 +17,11 @@ on:
         required: false
         default: ''
       platform_filter:
-        description: 'Build only this platform (e.g. geminilake), leave blank for all'
+        description: 'Build only this platform (e.g. stoney-ridge), leave blank for all'
+        required: false
+        default: ''
+      codename_filter:
+        description: 'Build only this codename (e.g. treeya), leave blank for all x86_64'
         required: false
         default: ''
 
@@ -84,79 +88,125 @@ jobs:
           echo "kernel_full=$FULL" >> "$GITHUB_OUTPUT"
 
   # ============================================================
-  # Build matrix - one job per platform
+  # Generate build matrix from hardware_map.conf (arch=x86_64)
+  #
+  # hardware_map.conf format:
+  #   CODENAME|PLATFORM|KERNEL_SERIES|PATCH_DIR|ARCH|NOTES
+  #
+  # Field 5 (ARCH) must be "x86_64" to be included here.
+  # One build job is created per unique platform (not per device).
+  # Comment out lines in hardware_map.conf to exclude platforms.
+  # ============================================================
+  generate-matrix:
+    name: Generate build matrix
+    runs-on: ubuntu-24.04
+    needs: resolve-version
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+      skip:   ${{ steps.gen.outputs.skip }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check push trigger
+        id: push_check
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            BUILD_TAG=$(echo '${{ toJson(github.event.commits) }}' | \
+              grep -oP '(?<=\[build:)[^\]]+' | head -1 || true)
+            echo "build_tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_tag=all" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate matrix from hardware_map.conf
+        id: gen
+        env:
+          BUILD_TAG:       ${{ steps.push_check.outputs.build_tag }}
+          PLATFORM_FILTER: ${{ github.event.inputs.platform_filter }}
+          CODENAME_FILTER: ${{ github.event.inputs.codename_filter }}
+          KERNEL_SERIES:   ${{ needs.resolve-version.outputs.kernel_series }}
+        run: |
+          # On push, require [build:*] tag
+          if [[ "${{ github.event_name }}" == "push" && -z "$BUILD_TAG" ]]; then
+            echo "No [build:*] tag in commit message - skipping x86_64 build"
+            echo "skip=true"  >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Parse hardware_map.conf for x86_64 entries
+          # Build one matrix entry per unique platform (not per device)
+          declare -A SEEN_PLATFORMS
+          ENTRIES=()
+          while IFS='|' read -r codename platform series patch_dir arch notes; do
+            [[ -z "$codename" || "$codename" == \#* ]] && continue
+            codename="${codename// /}"; codename="${codename%%#*}"
+            platform="${platform// /}"
+            series="${series// /}"
+            patch_dir="${patch_dir// /}"
+            arch="${arch// /}"
+            [[ "$arch" != "x86_64" ]] && continue
+            # Deduplicate by platform
+            [[ -n "${SEEN_PLATFORMS[$platform]+x}" ]] && continue
+            SEEN_PLATFORMS[$platform]=1
+            [[ "$series" == "default" ]] && series="$KERNEL_SERIES"
+            ENTRIES+=("${platform}|${series}|${patch_dir}")
+          done < configs/hardware_map.conf
+
+          if [[ ${#ENTRIES[@]} -eq 0 ]]; then
+            echo "No x86_64 entries found in hardware_map.conf - skipping"
+            echo "skip=true"  >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Build JSON matrix with optional filters
+          JSON='{"include":['
+          FIRST=true
+          for entry in "${ENTRIES[@]}"; do
+            IFS='|' read -r platform series patch_dir <<< "$entry"
+
+            # push filter
+            if [[ "${{ github.event_name }}" == "push" ]]; then
+              if [[ "$BUILD_TAG" != "all" && "$BUILD_TAG" != "x86_64" \
+                    && "$BUILD_TAG" != "$platform" ]]; then
+                continue
+              fi
+            fi
+
+            # workflow_dispatch filters
+            if [[ -n "$PLATFORM_FILTER" && "$PLATFORM_FILTER" != "all" \
+                  && "$PLATFORM_FILTER" != "$platform" ]]; then
+              continue
+            fi
+
+            [[ "$FIRST" == "true" ]] && FIRST=false || JSON+=','
+            JSON+="{\"platform\":\"${platform}\","
+            JSON+="\"kernel_series\":\"${series}\","
+            JSON+="\"patch_dir\":\"${patch_dir}\"}"
+          done
+          JSON+=']}'
+
+          echo "Matrix: $JSON"
+          echo "matrix=$JSON" >> "$GITHUB_OUTPUT"
+          echo "skip=false"   >> "$GITHUB_OUTPUT"
+
+  # ============================================================
+  # Build - one job per platform
   # ============================================================
   build:
     name: Build ${{ matrix.platform }}
-    needs: resolve-version
+    needs: [ resolve-version, generate-matrix ]
+    if: needs.generate-matrix.outputs.skip != 'true'
     runs-on: ubuntu-24.04
-
     strategy:
-      # Don't cancel all jobs if one platform fails
       fail-fast: false
-      matrix:
-        include:
-          # Intel platforms
-          #- platform: geminilake
-          #  codename: geminilake
-          #- platform: intel-braswell
-          #  codename: intel-braswell
-          #- platform: intel-cometlake
-          #  codename: intel-cometlake
-          #- platform: intel-tigerlake
-          #  codename: intel-tigerlake
-          #- platform: intel-alderlake
-          #  codename: intel-alderlake
-          # AMD platforms
-          - platform: stoney-ridge
-            codename: stoney-ridge
-          #- platform: amd-grunt
-          #  codename: amd-grunt
-          #- platform: amd-ryzen-zork
-          #  codename: amd-ryzen-zork
-          #- platform: amd-mendocino
-          #  codename: amd-mendocino
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
 
     steps:
-      - name: Check platform filter
-        id: check_filter
-        run: |
-          # schedule: always build all
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # workflow_dispatch: respect platform_filter input
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            FILTER="${{ github.event.inputs.platform_filter }}"
-            if [[ -z "$FILTER" || "$FILTER" == "all" || "$FILTER" == "${{ matrix.platform }}" ]]; then
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-            fi
-            exit 0
-          fi
-
-          # push: require [build:target] or [build:all] in commit message
-          BUILD_TAG=$(echo '${{ toJson(github.event.commits) }}' | \
-            grep -oP '(?<=\[build:)[^\]]+' | head -1 || true)
-
-          if [[ -z "$BUILD_TAG" ]]; then
-            echo "No [build:*] tag in commit message - skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$BUILD_TAG" == "all" || "$BUILD_TAG" == "${{ matrix.platform }}" ]]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Skip if not targeted
-        if: steps.check_filter.outputs.skip == 'true'
-        run: echo "Skipping ${{ matrix.platform }} - not targeted by this build"
-
       - name: Checkout
-        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/checkout@v4
 
       # --------------------------------------------------------
@@ -164,7 +214,6 @@ jobs:
       # Saves ~140MB download on repeat runs for same version
       # --------------------------------------------------------
       - name: Cache kernel tarball
-        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: /var/tmp/kernel-tarballs
@@ -175,7 +224,6 @@ jobs:
       # Falls back to any previous cache for this platform
       # --------------------------------------------------------
       - name: Cache ccache
-        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.ccache
@@ -188,7 +236,6 @@ jobs:
       # Install build dependencies
       # --------------------------------------------------------
       - name: Install build dependencies
-        if: steps.check_filter.outputs.skip != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -203,7 +250,6 @@ jobs:
       # Platform-specific firmware prerequisites
       # --------------------------------------------------------
       - name: Install platform firmware
-        if: steps.check_filter.outputs.skip != 'true'
         run: |
           case "${{ matrix.platform }}" in
             stoney-ridge|amd-grunt|amd-ryzen-zork|amd-mendocino)
@@ -241,7 +287,6 @@ jobs:
       # Download kernel source (uses cache if available)
       # --------------------------------------------------------
       - name: Download kernel source
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -265,7 +310,6 @@ jobs:
       # Apply patches
       # --------------------------------------------------------
       - name: Apply patches
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -294,7 +338,6 @@ jobs:
       # Merge kernel config
       # --------------------------------------------------------
       - name: Merge kernel config
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
@@ -314,7 +357,6 @@ jobs:
       # Build kernel .deb packages with ccache
       # --------------------------------------------------------
       - name: Build kernel
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
           CODENAME: ${{ matrix.codename }}
@@ -342,7 +384,6 @@ jobs:
       # Generate APT pin file
       # --------------------------------------------------------
       - name: Generate APT pin file
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
           CODENAME: ${{ matrix.codename }}
@@ -361,7 +402,6 @@ jobs:
       # Collect output files
       # --------------------------------------------------------
       - name: Collect output
-        if: steps.check_filter.outputs.skip != 'true'
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
           CODENAME: ${{ matrix.codename }}
@@ -376,7 +416,6 @@ jobs:
       # Upload as workflow artifact
       # --------------------------------------------------------
       - name: Upload artifacts
-        if: steps.check_filter.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_full }}
@@ -389,9 +428,13 @@ jobs:
   # ============================================================
   release:
     name: Create release
-    needs: [ resolve-version, build ]
+    needs: [ resolve-version, generate-matrix, build ]
     runs-on: ubuntu-24.04
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: |
+      always() &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      needs.resolve-version.result == 'success' &&
+      needs.generate-matrix.outputs.skip != 'true'
 
     steps:
       - name: Checkout
@@ -404,32 +447,43 @@ jobs:
           pattern: kernel-*
           merge-multiple: true
 
-      - name: Show release contents
-        run: ls -lh release-files/
+      - name: Check for partial failures
+        id: build_status
+        run: |
+          if [[ "${{ needs.build.result }}" == "failure" ]]; then
+            echo "partial_failure=true" >> "$GITHUB_OUTPUT"
+            echo "WARNING: one or more platform builds failed - releasing successful builds only"
+            echo "PARTIAL_WARNING=⚠️ **Partial build** — one or more platforms failed. Check the [Actions run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details." >> "$GITHUB_ENV"
+          else
+            echo "partial_failure=false" >> "$GITHUB_OUTPUT"
+            echo "PARTIAL_WARNING=" >> "$GITHUB_ENV"
+          fi
+          if [[ -z "$(ls -A release-files 2>/dev/null)" ]]; then
+            echo "ERROR: no artifacts to release - all builds failed"
+            exit 1
+          fi
+          ls -lh release-files/
+
+      - name: Get build date
+        id: date
+        run: echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.resolve-version.outputs.kernel_full }}-chromebook
-          name: "Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }}"
+          tag_name: ${{ needs.resolve-version.outputs.kernel_full }}-chromebook-${{ steps.date.outputs.date }}
+          name: "Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }} (${{ steps.date.outputs.date }})"
+          prerelease: true
+          make_latest: false
           body: |
             ## Chromebook OS Custom Chromebook Kernels
 
             Kernel version: **linux-${{ needs.resolve-version.outputs.kernel_full }}**
             Built: ${{ github.run_id }}
 
-            ### Platforms included
-            | Kernel package | Board family | Devices | Notes |
-            |---|---|---|---|
-            | linux-image-*-chromebook-geminilake | PHASER360 | Lenovo 500e Gen2, C340, Flex 3, NEC Y1 | Intel SOF audio |
-            | linux-image-*-chromebook-intel-braswell | STRAGO | Gnawty, Relm, Setzer, etc. | CHT SST audio |
-            | linux-image-*-chromebook-intel-cometlake | HATCH | Kohaku, Helios, etc. | SOF CML |
-            | linux-image-*-chromebook-intel-tigerlake | VOLTEER | Voxel, Delbin, etc. | SOF TGL + SoundWire |
-            | linux-image-*-chromebook-intel-alderlake | BRYA | Constitution, Vell, etc. | SOF ADL + SoundWire |
-            | linux-image-*-chromebook-stoney-ridge | TREEYA360 | Lenovo 300e Gen2 AMD | ACP audio, needs chromebook-linux-audio |
-            | linux-image-*-chromebook-amd-grunt | GRUNT | Aleena, Barla, Careena, etc. | ACP audio |
-            | linux-image-*-chromebook-amd-ryzen-zork | ZORK | Morphius, Dalboz, Vilboz, etc. | SOF/ACP audio |
-            | linux-image-*-chromebook-amd-mendocino | SKYRIM | Mordin, Grunt2, etc. | SOF audio |
+            ${{ env.PARTIAL_WARNING }}
+
+            Platforms are driven by `configs/hardware_map.conf` (arch=x86_64 entries).
 
             ### Installation
             ```bash
@@ -440,7 +494,7 @@ jobs:
             # https://github.com/unixabg/chromebook-kernel-builder/blob/main/configs/hardware_map.conf
 
             # Install kernel (replace PLATFORM with your platform name)
-            PLATFORM=geminilake
+            PLATFORM=stoney-ridge
             sudo dpkg -i linux-image-*-chromebook-${PLATFORM}*.deb \
                          linux-headers-*-chromebook-${PLATFORM}*.deb
 
@@ -455,9 +509,7 @@ jobs:
 
             ### Audio notes
             - **stoney-ridge**: Requires `chromebook-linux-audio` for UCM/topology files.
-              On kernel < 6.19 an additional patch is needed - see `patches/stoney-ridge/`.
             - All other platforms: audio should work out of the box after `setup-audio`.
           files: release-files/*
-          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
