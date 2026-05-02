@@ -184,13 +184,38 @@ This repo includes workflows that build kernels automatically on push
 or on a weekly schedule, publishing artifacts to the
 [Releases](../../releases) page.
 
-To trigger a manual build:
+### Commit message triggers
+
+Push builds are controlled by tags in the commit message. No tag means
+no build — this prevents every commit from triggering a full kernel build.
+
+| Commit message | Effect |
+|---|---|
+| `[build:all]` | Build all platforms, default kernel version |
+| `[build:stoney-ridge]` | Build one platform, default kernel version |
+| `[build:esche]` | Build one device (arm64), default kernel version |
+| `[build:all][kernel:6.12]` | Build all, resolve latest 6.12.x |
+| `[build:esche][kernel:6.12.80]` | Build one device, exact kernel version |
+| `[build:stoney-ridge][kernel:6.19.6]` | Build one platform, exact version |
+
+The `[kernel:x.y]` tag resolves the latest point release in that series.
+The `[kernel:x.y.z]` tag uses that exact version directly.
+Omitting `[kernel:]` uses the default series from `configs/kernel_versions.conf`.
+
+### Manual trigger (workflow_dispatch)
+
 1. Go to **Actions** → select the relevant workflow
 2. Click **Run workflow**
-3. Optionally specify a kernel series or platform filter
-4. Download the artifact from the completed run
+3. Optionally specify a kernel series, platform, or codename filter
+4. Download artifacts from the completed run, or wait for the release to publish
 
-Two workflows are provided:
+### Weekly schedule
+
+Builds run automatically every Sunday — x86_64 at 02:00 UTC, ARM64 at
+04:00 UTC — and publish a pre-release to the
+[Releases](../../releases) page. No commit needed.
+
+### Workflows
 
 - **build.yml** — x86_64 Chromebooks, produces `.deb` packages
 - **build_arm64.yml** — ARM64 Chromebooks (MT8183), produces a signed
