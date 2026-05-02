@@ -347,46 +347,113 @@ Contributions are welcome — the configs in this repo are a starting point,
 not a finished product, and real-world testing on real hardware is the only
 way to improve them.
 
-### Adding support for a new device
+---
 
-1. **Fork** this repo and create a branch for your device
-2. Add your board to `configs/hardware_map.conf`:
-   ```
-   myboard|my-platform|6.19|none|Acme Chromebook XYZ
-   ```
-3. Create `configs/device/myboard.cfg` with any overrides needed
-   (leave it minimal — only add what differs from the platform default)
-4. Build and test — if it boots and basic hardware works, open a **Pull
-   Request** with:
-   - The board codename and full device name
-   - Kernel version tested
-   - What works (boot, WiFi, display, audio, etc.)
-   - What doesn't work yet
+### Adding a new x86_64 device
 
-### Not sure if it works? Open an Issue instead
+**Files to edit or create:**
 
-If you've tested a config but aren't confident it's ready to merge, open
-an **Issue** using the *Device Support* template. Include your config,
-the kernel version, and what you observed. This helps track community
-testing across devices even before a PR is ready.
+| File | Required | What to do |
+|---|---|---|
+| `configs/hardware_map.conf` | ✅ | Add one line for your board |
+| `configs/device/<codename>.cfg` | ✅ | Create with any board-specific overrides (can be empty) |
+| `patches/<platform>/` | only if needed | Drop a `.patch` file here if your board needs a kernel patch |
 
-### ARM64 / velvet-os notes
+**`hardware_map.conf` format:**
+```
+CODENAME|PLATFORM|KERNEL_SERIES|PATCH_DIR|ARCH|NOTES
+```
 
-For MT8183 and other ARM64 devices, builds go through GitHub Actions and
-the resulting tarball is installed on-device via velvet-tools. When
-submitting a new ARM64 device:
-- Note which DTB you used from `arch/arm64/boot/dts/`
-- Confirm velvet-tools handled the initramfs and kpart repack correctly
-- Note whether the board boots from the kukui platform config as-is or
-  needed device-level overrides
+Example:
+```
+myboard|intel-cometlake|default|none|x86_64|Acme Chromebook XYZ
+```
+
+- `CODENAME` — ChromeOS board codename (check `cat /sys/class/dmi/id/board_name`)
+- `PLATFORM` — must match an existing `configs/platform/<platform>.cfg`
+- `KERNEL_SERIES` — use `default` unless your board needs a specific series (e.g. `6.12`)
+- `PATCH_DIR` — subdirectory under `patches/` to apply, or `none`
+- `ARCH` — `x86_64` for Intel/AMD boards
+- `NOTES` — human-readable device name
+
+**`configs/device/<codename>.cfg`:**
+Only include options that differ from the platform default. If the platform
+config works as-is, the file can be empty. Do not copy the entire platform
+config — keep it minimal.
+
+---
+
+### Adding a new ARM64 device
+
+ARM64 builds run entirely through GitHub Actions — there is no local build
+script. Adding a device means adding config files; the CI pipeline handles
+the rest.
+
+**Files to edit or create:**
+
+| File | Required | What to do |
+|---|---|---|
+| `configs/hardware_map.conf` | ✅ | Add one line for your board |
+| `configs/device/<codename>.cfg` | ✅ | Create with any board-specific overrides (can be empty) |
+| `configs/cmdline/<codename>.cmdline` | only if needed | Create if your board needs different kernel parameters than the platform default |
+| `patches/<platform>/` | only if needed | Drop a `.patch` file here for device-specific kernel patches |
+
+**`hardware_map.conf` entry for ARM64:**
+```
+myboard|mediatek-mt8183|default|none|arm64|Acme Chromebook ARM
+```
+
+Note: `ARCH` must be `arm64` — this is what tells the build workflow to
+include your device in the ARM64 matrix.
+
+**Platform-level patches** (mt8183 and mt81xx patches) are automatically
+pulled from the upstream hexdump0815 repo at build time — you do not need
+to include those. Only add patches to `patches/<platform>/` if your device
+needs something board-specific on top of the upstream set.
+
+**Cmdline fallback order** — the build looks for cmdline files in this order:
+1. `configs/cmdline/<codename>.cmdline` — your device
+2. `configs/cmdline/<platform>.cmdline` — your platform
+3. `configs/cmdline/chromebook-kukui.cmdline` — generic MT8183 fallback
+
+If the generic kukui cmdline works for your board, no cmdline file is needed.
+
+---
+
+### What to include in a Pull Request
+
+Whether x86_64 or ARM64, a good PR includes:
+
+- **The config files** — `hardware_map.conf` entry + `configs/device/<codename>.cfg`
+- **Board codename and full device name**
+- **Kernel version tested** (from `uname -r`)
+- **What works** — boot, WiFi, display, keyboard/touchpad, audio, suspend, camera
+- **What doesn't work or is untested**
+- **For ARM64** — which DTB was used, whether velvet-tools handled the kpart
+  correctly, and whether any cmdline changes were needed
+
+Keep the PR focused on one device. If you find a fix that helps the whole
+platform (not just your board), note that in the PR description and we can
+apply it to the platform config instead.
+
+---
+
+### Not ready to open a PR? Open an Issue instead
+
+If you've tested a kernel on your device but aren't sure the config is
+ready to merge, open an **Issue** using the *Device Support* template.
+Partial reports — even just "it boots and WiFi works" — are useful for
+tracking community coverage across devices.
+
+---
 
 ### General guidelines
 
-- Keep device configs minimal — prefer fixing things in the platform
-  config if the issue affects the whole SoC family
-- If a config option fixes a regression, note the kernel version where
-  it was introduced
-- Tested-on reports in PRs and Issues are just as valuable as code
+- Keep device configs minimal — if an option fixes something that affects
+  the whole SoC family, it belongs in the platform config, not the device config
+- If a config option fixes a regression, note the kernel version where it
+  was introduced
+- Tested-on reports in PRs and Issues are just as valuable as code changes
 
 ---
 
