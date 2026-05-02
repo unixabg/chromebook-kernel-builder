@@ -47,7 +47,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "push" ]]; then
             KERNEL_TAG=$(echo '${{ toJson(github.event.commits) }}' | \
               grep -oP '(?<=\[kernel:)[0-9]+\.[0-9]+(\.[0-9]+)?(?=\])' | head -1 || true)
-            [[ -n "$KERNEL_TAG" ]] && echo "Kernel override from commit tag: $KERNEL_TAG"
+            [[ -n "$KERNEL_TAG" ]] && echo "Kernel override from commit tag: $KERNEL_TAG" || true
           fi
 
           if [[ -n "$KERNEL_TAG" ]]; then
