@@ -164,10 +164,12 @@ jobs:
           done < configs/hardware_map.conf
 
           if [[ ${#ENTRIES[@]} -eq 0 ]]; then
-            echo "ERROR: No arm64 entries found in hardware_map.conf"
-            echo "  Add entries with arm64 in field 5, e.g.:"
+            echo "No arm64 entries found in hardware_map.conf - skipping"
+            echo "  To add a device, add a line with arm64 in field 5, e.g.:"
             echo "  esche|mediatek-mt8183|default|none|arm64|HP Chromebook 11MK G9 EE"
-            exit 1
+            echo "skip=true"  >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           # Build JSON matrix with optional filters
