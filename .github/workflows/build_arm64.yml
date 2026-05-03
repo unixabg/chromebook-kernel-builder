@@ -17,7 +17,7 @@ on:
         required: false
         default: ''
       platform_filter:
-        description: 'Build only this platform (e.g. mediatek-mt8183), leave blank for all'
+        description: 'Build only this platform (e.g. mediatek-mt81xx), leave blank for all'
         required: false
         default: ''
       codename_filter:
@@ -168,7 +168,7 @@ jobs:
           if [[ ${#ENTRIES[@]} -eq 0 ]]; then
             echo "No arm64 entries found in hardware_map.conf - skipping"
             echo "  To add a device, add a line with arm64 in field 5, e.g.:"
-            echo "  esche|mediatek-mt8183|default|none|arm64|HP Chromebook 11MK G9 EE"
+            echo "  esche|mediatek-mt81xx|default|none|arm64|HP Chromebook 11MK G9 EE"
             echo "skip=true"  >> "$GITHUB_OUTPUT"
             echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
             exit 0
@@ -370,7 +370,7 @@ jobs:
         run: |
           export CCACHE_DIR=~/.ccache
           ccache -s
-          LOCAL_VERSION="-chromebook-${{ matrix.platform }}-velvet-os"
+          LOCAL_VERSION="-chromebook-${{ matrix.dtb_prefix }}-velvet-os"
           cd "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           time make ARCH=arm64 \
             CC="ccache gcc" \
@@ -466,7 +466,8 @@ jobs:
 
           mkdir -p output
           BUILD_DATE=$(date +%Y%m%d)
-          TARBALL="output/${kver}-${CODENAME}-velvet-os-${BUILD_DATE}.tar.gz"
+          DTB_PREFIX="${{ matrix.dtb_prefix }}"
+          TARBALL="output/${kver}-${DTB_PREFIX}-${CODENAME}-velvet-os-${BUILD_DATE}.tar.gz"
           tar czf "${TARBALL}" \
             -C "${STAGE}" \
             "boot/Image-${kver}" \
@@ -475,7 +476,7 @@ jobs:
             "boot/dtb-${kver}" \
             "boot/vmlinux.kpart-${kver}" \
             "lib/modules/${kver}"
-          cp "${KSRC}/.config" "output/config.${kver}-${CODENAME}-velvet-os-${BUILD_DATE}"
+          cp "${KSRC}/.config" "output/config.${kver}-${DTB_PREFIX}-${CODENAME}-velvet-os-${BUILD_DATE}"
           rm -rf "${STAGE}"
           ls -lh output/
 

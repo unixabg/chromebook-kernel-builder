@@ -16,7 +16,7 @@
 # Usage:
 #   ./scripts/merge_kernel_config_arm64.sh \
 #       --kernel-src /path/to/linux-6.x.y \
-#       --platform   mediatek-mt8183 \
+#       --platform   mediatek-mt81xx \
 #       --codename   esche
 # =============================================================================
 
@@ -187,7 +187,7 @@ verify_config() {
     }
 
     case "$PLATFORM" in
-        mediatek-mt8183)
+        mediatek-mt81xx)
             log "  -- SoC core --"
             check_y  "CONFIG_COMMON_CLK_MT8183" "SoC clocks missing - will not boot"
             check_ym "CONFIG_PINCTRL_MT8183"    "pinctrl missing - many devices will fail"
