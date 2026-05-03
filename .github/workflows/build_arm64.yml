@@ -141,7 +141,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "push" && -z "$BUILD_TAG" ]]; then
             echo "No [build:*] tag in commit message - skipping arm64 build"
             echo "skip=true"  >> "$GITHUB_OUTPUT"
-            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[{\"codename\":\"skip\",\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\",\"dtb_prefix\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -170,7 +170,7 @@ jobs:
             echo "  To add a device, add a line with arm64 in field 5, e.g.:"
             echo "  esche|mediatek-mt81xx|default|none|arm64|HP Chromebook 11MK G9 EE"
             echo "skip=true"  >> "$GITHUB_OUTPUT"
-            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[{\"codename\":\"skip\",\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\",\"dtb_prefix\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -204,6 +204,14 @@ jobs:
             JSON+="\"dtb_prefix\":\"${dtb_prefix}\"}"
           done
           JSON+=']}'
+
+          # If all entries were filtered out, use dummy to avoid empty matrix error
+          if [[ "$FIRST" == "true" ]]; then
+            echo "No devices matched filters - skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[{\"codename\":\"skip\",\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\",\"dtb_prefix\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           echo "Matrix: $JSON"
           echo "matrix=$JSON" >> "$GITHUB_OUTPUT"

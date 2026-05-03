@@ -25,9 +25,6 @@ on:
         required: false
         default: ''
 
-permissions:
-  contents: write
-
 jobs:
   # ============================================================
   # Resolve the kernel version once, share across all matrix jobs
@@ -135,7 +132,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "push" && -z "$BUILD_TAG" ]]; then
             echo "No [build:*] tag in commit message - skipping x86_64 build"
             echo "skip=true"  >> "$GITHUB_OUTPUT"
-            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[{\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -161,7 +158,7 @@ jobs:
           if [[ ${#ENTRIES[@]} -eq 0 ]]; then
             echo "No x86_64 entries found in hardware_map.conf - skipping"
             echo "skip=true"  >> "$GITHUB_OUTPUT"
-            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[{\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -191,6 +188,14 @@ jobs:
             JSON+="\"patch_dir\":\"${patch_dir}\"}"
           done
           JSON+=']}'
+
+          # If all entries were filtered out, use dummy to avoid empty matrix error
+          if [[ "$FIRST" == "true" ]]; then
+            echo "No platforms matched filters - skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[{\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           echo "Matrix: $JSON"
           echo "matrix=$JSON" >> "$GITHUB_OUTPUT"
