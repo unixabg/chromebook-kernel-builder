@@ -447,8 +447,11 @@ jobs:
 
           mkdir -p "${BOOT}/dtb-${kver}"
           DTB_PREFIX="${{ matrix.dtb_prefix }}"
-          echo "Copying DTBs matching: ${DTB_PREFIX}-*.dtb"
-          find "${KSRC}/arch/arm64/boot/dts/mediatek" -name "${DTB_PREFIX}-*.dtb" \
+          # Derive DTS vendor subdir from platform: mediatek-mt81xx -> mediatek, rockchip-rk33xx -> rockchip
+          DTS_VENDOR=$(echo "${{ matrix.platform }}" | cut -d- -f1)
+          DTS_DIR="${KSRC}/arch/arm64/boot/dts/${DTS_VENDOR}"
+          echo "Copying DTBs matching: ${DTS_DIR}/${DTB_PREFIX}-*.dtb"
+          find "${DTS_DIR}" -name "${DTB_PREFIX}-*.dtb" \
             -exec cp -v {} "${BOOT}/dtb-${kver}/" \;
           DTB_COUNT=$(find "${BOOT}/dtb-${kver}" -name '*.dtb' | wc -l)
           echo "Staged ${DTB_COUNT} DTB(s)"
