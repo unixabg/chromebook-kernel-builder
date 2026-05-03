@@ -25,6 +25,9 @@ on:
         required: false
         default: ''
 
+permissions:
+  contents: write
+
 jobs:
   # ============================================================
   # Resolve the kernel version once, share across matrix jobs
