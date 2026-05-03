@@ -48,17 +48,47 @@ log() { echo "[merge_config_arm64] $*"; }
 cd "$KERNEL_SRC"
 
 # ── Step 1: Copy known-working base config ────────────────────────────────────
+# Priority:
+#   1. configs/base/<platform>.config in this repo (local, versioned)
+#   2. config file from cloned external repo (ARM64_EXT_DIR)
+#      hexdump0815 naming: config.cbm (mediatek), config.rkc (rockchip), etc.
 BASE_CONFIG="${REPO_DIR}/configs/base/${PLATFORM}.config"
+EXT_DIR="${ARM64_EXT_DIR:-}"
 
-if [[ ! -f "$BASE_CONFIG" ]]; then
+if [[ -f "$BASE_CONFIG" ]]; then
+    log "Using local base config: configs/base/${PLATFORM}.config"
+    log "  ($(wc -l < "$BASE_CONFIG") lines)"
+    cp "$BASE_CONFIG" .config
+elif [[ -n "$EXT_DIR" ]]; then
+    log "No local base config for ${PLATFORM} - searching external repo..."
+    # Try common hexdump0815 config file naming patterns
+    EXT_CONFIG=""
+    for candidate in \
+        "${EXT_DIR}/config.cbm" \
+        "${EXT_DIR}/config.rkc" \
+        "${EXT_DIR}/config.rk3" \
+        "${EXT_DIR}/config.mt8" \
+        "${EXT_DIR}/config.mt7"; do
+        if [[ -f "$candidate" ]]; then
+            EXT_CONFIG="$candidate"
+            break
+        fi
+    done
+    if [[ -z "$EXT_CONFIG" ]]; then
+        log "ERROR: no base config found locally or in external repo: $EXT_DIR"
+        log "  Add configs/base/${PLATFORM}.config to this repo, or ensure"
+        log "  the external repo contains a config.cbm/config.rkc/etc. file"
+        exit 1
+    fi
+    log "Using external base config: $(basename "$EXT_CONFIG")"
+    log "  ($(wc -l < "$EXT_CONFIG") lines)"
+    cp "$EXT_CONFIG" .config
+else
     log "ERROR: base config not found: $BASE_CONFIG"
     log "  Expected a known-working config at configs/base/${PLATFORM}.config"
+    log "  Or set ARM64_EXT_DIR to a cloned external repo containing a config file"
     exit 1
 fi
-
-log "Using base config: configs/base/${PLATFORM}.config"
-log "  ($(wc -l < "$BASE_CONFIG") lines)"
-cp "$BASE_CONFIG" .config
 
 # ── Step 2: olddefconfig ──────────────────────────────────────────────────────
 # Adapts the base config to the kernel version we are actually building.
