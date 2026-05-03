@@ -2,12 +2,12 @@
 # =============================================================================
 # scripts/build_kernel_arm64.sh
 #
-# Builds a mainline arm64 kernel for MT8183 Chromebooks
+# Builds a mainline arm64 kernel for ARM64 Chromebooks
 #
 #   boot/Image-${kver}
 #   boot/System.map-${kver}
 #   boot/config-${kver}
-#   boot/dtb-${kver}/mt8183-kukui-*.dtb
+#   boot/dtb-${kver}/<dtb-prefix>-*.dtb
 #   boot/vmlinux.kpart-${kver}
 #   lib/modules/${kver}/
 #
@@ -16,10 +16,11 @@
 # x86_64 if CROSS_COMPILE=aarch64-linux-gnu- is set in the environment.
 #
 # Usage:
-#   ./scripts/build_kernel_arm64.sh <platform> <codename> <kernel-full-version>
+#   ./scripts/build_kernel_arm64.sh <platform> <codename> <kernel-full-version> <dtb-prefix>
 #
 # Example:
-#   ./scripts/build_kernel_arm64.sh mediatek-mt8183 esche 6.19.1
+#   ./scripts/build_kernel_arm64.sh mediatek-mt8183 esche 6.12.76 mt8183-kukui
+#   ./scripts/build_kernel_arm64.sh mediatek-mt8183 oak   6.12.76 mt8173-elm
 # =============================================================================
 
 set -e
@@ -32,10 +33,12 @@ RESULT_DIR="${REPO_DIR}/output"
 PLATFORM="${1:-}"
 CODENAME="${2:-}"
 KVER_FULL="${3:-}"
+DTB_PREFIX="${4:-}"
 
-if [[ -z "$PLATFORM" || -z "$CODENAME" || -z "$KVER_FULL" ]]; then
-    echo "Usage: $0 <platform> <codename> <kernel-full-version>"
-    echo "  e.g: $0 mediatek-mt8183 esche 6.19.1"
+if [[ -z "$PLATFORM" || -z "$CODENAME" || -z "$KVER_FULL" || -z "$DTB_PREFIX" ]]; then
+    echo "Usage: $0 <platform> <codename> <kernel-full-version> <dtb-prefix>"
+    echo "  e.g: $0 mediatek-mt8183 esche 6.12.76 mt8183-kukui"
+    echo "  e.g: $0 mediatek-mt8183 oak   6.12.76 mt8173-elm"
     exit 1
 fi
 
@@ -116,13 +119,16 @@ cp -v .config               "${BOOT}/config-${kver}"
 cp -v arch/arm64/boot/Image "${BOOT}/Image-${kver}"
 cp -v System.map            "${BOOT}/System.map-${kver}"
 
-# DTBs - all MT8183 kukui variants
+# DTBs - copy all DTBs matching the device prefix from hardware_map.conf
 mkdir -p "${BOOT}/dtb-${kver}"
-cp -v arch/arm64/boot/dts/mediatek/mt8183-kukui-*.dtb "${BOOT}/dtb-${kver}/"
+echo "==> Copying DTBs matching: arch/arm64/boot/dts/mediatek/${DTB_PREFIX}-*.dtb"
+find arch/arm64/boot/dts/mediatek -name "${DTB_PREFIX}-*.dtb" \
+    -exec cp -v {} "${BOOT}/dtb-${kver}/" \;
 DTB_COUNT=$(find "${BOOT}/dtb-${kver}" -name '*.dtb' | wc -l)
 echo "==> Staged ${DTB_COUNT} DTB(s)"
 if [[ "$DTB_COUNT" -eq 0 ]]; then
-    echo "ERROR: no mt8183-kukui DTBs produced - check kernel config and patches"
+    echo "ERROR: no DTBs matching ${DTB_PREFIX}-*.dtb produced"
+    echo "  Check kernel config, patches, and DTB_PREFIX in hardware_map.conf"
     exit 1
 fi
 

@@ -25,9 +25,6 @@ on:
         required: false
         default: ''
 
-permissions:
-  contents: write
-
 jobs:
   # ============================================================
   # Resolve the kernel version once, share across matrix jobs
@@ -149,8 +146,9 @@ jobs:
           fi
 
           # Parse hardware_map.conf for arm64 entries
+          # Format: CODENAME|PLATFORM|KERNEL_SERIES|PATCH_DIR|ARCH|DTB_PREFIX|NOTES
           ENTRIES=()
-          while IFS='|' read -r codename platform series patch_dir arch notes; do
+          while IFS='|' read -r codename platform series patch_dir arch dtb_prefix notes; do
             # Skip comments and blank lines
             [[ -z "$codename" || "$codename" == \#* ]] && continue
             # Trim whitespace
@@ -159,11 +157,12 @@ jobs:
             series="${series// /}"
             patch_dir="${patch_dir// /}"
             arch="${arch// /}"
+            dtb_prefix="${dtb_prefix// /}"
             # Only arm64
             [[ "$arch" != "arm64" ]] && continue
             # Resolve "default" series
             [[ "$series" == "default" ]] && series="$KERNEL_SERIES"
-            ENTRIES+=("${codename}|${platform}|${series}|${patch_dir}")
+            ENTRIES+=("${codename}|${platform}|${series}|${patch_dir}|${dtb_prefix}")
           done < configs/hardware_map.conf
 
           if [[ ${#ENTRIES[@]} -eq 0 ]]; then
@@ -179,7 +178,7 @@ jobs:
           JSON='{"include":['
           FIRST=true
           for entry in "${ENTRIES[@]}"; do
-            IFS='|' read -r codename platform series patch_dir <<< "$entry"
+            IFS='|' read -r codename platform series patch_dir dtb_prefix <<< "$entry"
 
             # push filter
             if [[ "${{ github.event_name }}" == "push" ]]; then
@@ -201,7 +200,8 @@ jobs:
 
             [[ "$FIRST" == "true" ]] && FIRST=false || JSON+=','
             JSON+="{\"codename\":\"${codename}\",\"platform\":\"${platform}\","
-            JSON+="\"kernel_series\":\"${series}\",\"patch_dir\":\"${patch_dir}\"}"
+            JSON+="\"kernel_series\":\"${series}\",\"patch_dir\":\"${patch_dir}\","
+            JSON+="\"dtb_prefix\":\"${dtb_prefix}\"}"
           done
           JSON+=']}'
 
@@ -413,11 +413,13 @@ jobs:
           cp "${KSRC}/System.map"            "${BOOT}/System.map-${kver}"
 
           mkdir -p "${BOOT}/dtb-${kver}"
-          cp "${KSRC}"/arch/arm64/boot/dts/mediatek/mt8183-kukui-*.dtb \
-             "${BOOT}/dtb-${kver}/"
+          DTB_PREFIX="${{ matrix.dtb_prefix }}"
+          echo "Copying DTBs matching: ${DTB_PREFIX}-*.dtb"
+          find "${KSRC}/arch/arm64/boot/dts/mediatek" -name "${DTB_PREFIX}-*.dtb" \
+            -exec cp -v {} "${BOOT}/dtb-${kver}/" \;
           DTB_COUNT=$(find "${BOOT}/dtb-${kver}" -name '*.dtb' | wc -l)
           echo "Staged ${DTB_COUNT} DTB(s)"
-          [[ "$DTB_COUNT" -eq 0 ]] && { echo "ERROR: no DTBs produced"; exit 1; }
+          [[ "$DTB_COUNT" -eq 0 ]] && { echo "ERROR: no DTBs matching ${DTB_PREFIX}-*.dtb"; exit 1; }
 
           lz4 -f "${BOOT}/Image-${kver}" "${STAGE}/Image.lz4"
           dd if=/dev/zero of="${STAGE}/bootloader.bin" bs=512 count=1 2>/dev/null
