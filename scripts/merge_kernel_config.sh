@@ -48,8 +48,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$KERNEL_SRC" ]] && { echo "ERROR: --kernel-src required"; exit 1; }
-[[ -z "$CODENAME"   ]] && { echo "ERROR: --codename required";   exit 1; }
 [[ -z "$PLATFORM"   ]] && { echo "ERROR: --platform required";   exit 1; }
+# CODENAME is optional - if not provided the device layer is skipped
 [[ -z "$OUTPUT_CONFIG" ]] && OUTPUT_CONFIG="${KERNEL_SRC}/.config"
 
 log() { echo "[merge_config] $*"; }
@@ -92,12 +92,16 @@ else
 fi
 
 # Layer 4: Device fragment (optional - not all codenames have one)
-DEVICE_FRAG="${REPO_DIR}/configs/device/${CODENAME}.cfg"
-if [[ -f "$DEVICE_FRAG" ]]; then
-    FRAGMENTS+=("$DEVICE_FRAG")
-    log "Device fragment: $DEVICE_FRAG"
+if [[ -n "$CODENAME" ]]; then
+    DEVICE_FRAG="${REPO_DIR}/configs/device/${CODENAME}.cfg"
+    if [[ -f "$DEVICE_FRAG" ]]; then
+        FRAGMENTS+=("$DEVICE_FRAG")
+        log "Device fragment: $DEVICE_FRAG"
+    else
+        log "INFO: no device-specific fragment for '$CODENAME' (using platform defaults)"
+    fi
 else
-    log "INFO: no device-specific fragment for '$CODENAME' (using platform defaults)"
+    log "INFO: no codename provided - skipping device layer"
 fi
 
 # Layer 5: Generic feature additions

@@ -357,7 +357,6 @@ jobs:
           fi
           scripts/merge_kernel_config.sh \
             --kernel-src "/var/tmp/kernel-build/linux-${KERNEL_FULL}" \
-            --codename "${{ matrix.codename }}" \
             --platform "${{ matrix.platform }}" \
             --base-config "$BASE_CFG"
 
@@ -367,12 +366,12 @@ jobs:
       - name: Build kernel
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
-          CODENAME: ${{ matrix.codename }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
           export CCACHE_DIR=~/.ccache
           ccache -s
 
-          LOCAL_VERSION="-chromebook-${CODENAME}"
+          LOCAL_VERSION="-chromebook-${PLATFORM}"
           FULL_PKG_VERSION="${KERNEL_FULL}${LOCAL_VERSION}"
 
           cd "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
@@ -394,17 +393,16 @@ jobs:
       - name: Generate APT pin file
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
-          CODENAME: ${{ matrix.codename }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           mkdir -p output
           chmod +x scripts/install_apt_pin.sh
           scripts/install_apt_pin.sh \
             --generate \
-            "${KERNEL_FULL}-chromebook-${CODENAME}" \
-            "${CODENAME}" \
+            "${KERNEL_FULL}-chromebook-${PLATFORM}" \
             "${PLATFORM}" \
-            "output/99-chromebook-kernel-${CODENAME}"
+            "${PLATFORM}" \
+            "output/99-chromebook-kernel-${PLATFORM}"
 
       # --------------------------------------------------------
       # Collect output files
@@ -412,7 +410,7 @@ jobs:
       - name: Collect output
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
-          CODENAME: ${{ matrix.codename }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
           mkdir -p output
           find /var/tmp/kernel-build -maxdepth 1 -name "*.deb" \
