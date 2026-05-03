@@ -277,31 +277,45 @@ jobs:
 
       # --------------------------------------------------------
       # Clone external patch/config source
-      # ARM64_EXTERNAL_REPO_URL in kernel_versions.conf points to
-      # hexdump0815 (or any contributor's upstream patch repo).
+      # URL is looked up from kernel_versions.conf using the
+      # platform name: ARM64_EXTERNAL_REPO_URL_<PLATFORM_KEY>
+      # e.g. mediatek-mt81xx -> ARM64_EXTERNAL_REPO_URL_MEDIATEK
+      #      rockchip-rk3399 -> ARM64_EXTERNAL_REPO_URL_ROCKCHIP
       # --------------------------------------------------------
       - name: Clone external patch/config source
         env:
           KERNEL_SERIES: ${{ needs.resolve-version.outputs.kernel_series }}
+          PLATFORM:      ${{ matrix.platform }}
         run: |
-          EXT_URL=$(grep "^ARM64_EXTERNAL_REPO_URL=" configs/kernel_versions.conf \
+          # Derive key from platform name: mediatek-mt81xx -> MEDIATEK
+          PLATFORM_KEY=$(echo "$PLATFORM" | cut -d- -f1 | tr '[:lower:]' '[:upper:]')
+          EXT_URL=$(grep "^ARM64_EXTERNAL_REPO_URL_${PLATFORM_KEY}=" configs/kernel_versions.conf \
                     | cut -d= -f2-)
+
           if [[ -z "$EXT_URL" ]]; then
-            echo "ARM64_EXTERNAL_REPO_URL not set - skipping"
+            echo "ARM64_EXTERNAL_REPO_URL_${PLATFORM_KEY} not set - skipping external clone"
             echo "ARM64_EXT_DIR=" >> "$GITHUB_ENV"
             exit 0
           fi
+
           EXT_DIR="/var/tmp/arm64-external-src"
+          echo "Cloning $EXT_URL for platform $PLATFORM ..."
           git clone --depth=1 "$EXT_URL" "$EXT_DIR"
           echo "ARM64_EXT_DIR=${EXT_DIR}" >> "$GITHUB_ENV"
 
-          PATCH_SUBDIR="${EXT_DIR}/misc.cbm/patches/v${KERNEL_SERIES}"
-          if [[ -d "$PATCH_SUBDIR" ]]; then
-            COUNT=$(find "$PATCH_SUBDIR" -name '*.patch' | wc -l)
-            echo "External patch dir: $PATCH_SUBDIR ($COUNT patches)"
-          else
-            echo "WARNING: $PATCH_SUBDIR not found"
-            find "${EXT_DIR}/misc.cbm/patches" -maxdepth 1 -type d | sort || true
+          # Check for patch subdir - naming varies by repo (misc.cbm, misc.rkc etc.)
+          for subdir in misc.cbm misc.rkc misc.rk3 misc; do
+            PATCH_SUBDIR="${EXT_DIR}/${subdir}/patches/v${KERNEL_SERIES}"
+            if [[ -d "$PATCH_SUBDIR" ]]; then
+              COUNT=$(find "$PATCH_SUBDIR" -name '*.patch' | wc -l)
+              echo "External patch dir: $PATCH_SUBDIR ($COUNT patches)"
+              echo "ARM64_EXT_PATCH_SUBDIR=${PATCH_SUBDIR}" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          if [[ -z "${ARM64_EXT_PATCH_SUBDIR:-}" ]]; then
+            echo "WARNING: no patch subdir found for v${KERNEL_SERIES} in $EXT_DIR"
+            find "$EXT_DIR" -maxdepth 3 -type d -name "patches" | sort || true
           fi
 
       # --------------------------------------------------------
@@ -327,22 +341,32 @@ jobs:
               || echo "  WARNING: $(basename "$1") did not apply cleanly"
           }
 
-          # 1. External patches
-          if [[ -n "$ARM64_EXT_DIR" ]]; then
-            EXT_PATCH_DIR="${ARM64_EXT_DIR}/misc.cbm/patches/v${KERNEL_SERIES}"
+          # 1. External patches - derive SoC prefix from dtb_prefix
+          # e.g. mt8183-kukui -> mt8183, mt8173-elm -> mt8173, rk3399-gru -> rk3399
+          if [[ -n "$ARM64_EXT_DIR" && -n "${ARM64_EXT_PATCH_SUBDIR:-}" ]]; then
+            EXT_PATCH_DIR="$ARM64_EXT_PATCH_SUBDIR"
+            SOC_PREFIX=$(echo "${{ matrix.dtb_prefix }}" | cut -d- -f1)
+            echo "==> SoC patch prefix: ${SOC_PREFIX}"
             if [[ -d "$EXT_PATCH_DIR" ]]; then
               shopt -s nullglob
-              ext_mt8183=("${EXT_PATCH_DIR}"/mt8183*.patch)
-              [[ ${#ext_mt8183[@]} -gt 0 ]] && \
-                echo "==> ${#ext_mt8183[@]} external mt8183 patch(es)..." && \
-                for p in "${ext_mt8183[@]}"; do apply_patch "$p"; done
-              ext_mt81xx=("${EXT_PATCH_DIR}"/mt81xx*.patch)
-              [[ ${#ext_mt81xx[@]} -gt 0 ]] && \
-                echo "==> ${#ext_mt81xx[@]} external mt81xx patch(es)..." && \
-                for p in "${ext_mt81xx[@]}"; do apply_patch "$p"; done
+              # SoC-specific patches (e.g. mt8183*.patch, mt8173*.patch, rk3399*.patch)
+              soc_patches=("${EXT_PATCH_DIR}"/${SOC_PREFIX}*.patch)
+              [[ ${#soc_patches[@]} -gt 0 ]] && \
+                echo "==> ${#soc_patches[@]} external ${SOC_PREFIX} patch(es)..." && \
+                for p in "${soc_patches[@]}"; do apply_patch "$p"; done
+              # Family-wide patches (e.g. mt81xx*.patch) - only if different from SOC_PREFIX
+              FAMILY_PREFIX=$(echo "${{ matrix.platform }}" | sed 's/[^0-9]*$/xx/' | cut -d- -f2)
+              if [[ "$FAMILY_PREFIX" != "$SOC_PREFIX" ]]; then
+                family_patches=("${EXT_PATCH_DIR}"/${FAMILY_PREFIX}*.patch)
+                [[ ${#family_patches[@]} -gt 0 ]] && \
+                  echo "==> ${#family_patches[@]} external ${FAMILY_PREFIX} patch(es)..." && \
+                  for p in "${family_patches[@]}"; do apply_patch "$p"; done
+              fi
             else
               echo "WARNING: external patch dir not found: $EXT_PATCH_DIR"
             fi
+          else
+            echo "No external patch source configured for ${{ matrix.platform }}"
           fi
 
           # 2. Local contributor patches
@@ -364,7 +388,8 @@ jobs:
 
       - name: Merge kernel config
         env:
-          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+          KERNEL_FULL:    ${{ needs.resolve-version.outputs.kernel_full }}
+          ARM64_EXT_DIR:  ${{ env.ARM64_EXT_DIR }}
         run: |
           chmod +x scripts/merge_kernel_config_arm64.sh
           scripts/merge_kernel_config_arm64.sh \
