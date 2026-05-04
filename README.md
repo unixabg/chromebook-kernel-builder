@@ -73,21 +73,17 @@ Every kernel config is assembled from layers merged in order.
 Later layers override earlier ones for any conflicting option.
 
 ```
-Layer 0 — KNOWN-GOOD BASE
-  configs/base/6.19.0-rc1.cfg
-  A full working kernel config used as the foundation.
-
-Layer 1 — CHROMEBOOK COMMON (always applied)
+Layer 0 — BASE (always applied)
   configs/base/chromebooks-x86_64.cfg
-  Contains: CrOS EC, input, MMC, WiFi, BT, SOF core, ALSA,
-            common codecs, firmware loading, etc.
+  Full curated Chromebook config. Contains: CrOS EC, input, MMC, WiFi,
+  BT, SOF core, ALSA, common codecs, crypto, filesystems, Virtio, etc.
 
-Layer 2 — PLATFORM (per SoC family)
+Layer 1 — PLATFORM (per SoC family)
   configs/platform/<platform>.cfg
   Contains: GPU driver settings, SOF/ACP backend, platform-specific
             codecs, built-in firmware requirements.
 
-Layer 3 — DEVICE (per board codename, optional)
+Layer 2 — DEVICE (per board codename, optional)
   configs/device/<codename>.cfg
   Contains: only what differs from the platform default
             (e.g., specific codec present/absent on this board)
@@ -105,8 +101,7 @@ chromebook-kernel-builder/
 │   ├── hardware_map.conf            ← Maps codename → platform + kernel version
 │   ├── kernel_versions.conf         ← Kernel series tracking
 │   ├── base/
-│   │   ├── 6.19.0-rc1.cfg           ← Layer 0: known-good full config
-│   │   └── chromebooks-x86_64.cfg   ← Layer 1: Chromebook common
+│   │   └── chromebooks-x86_64.cfg   ← Layer 0: full curated Chromebook base config
 │   ├── cmdline/
 │   │   └── chromebook-kukui.cmdline ← Kernel cmdline for MT8183 kpart
 │   ├── platform/
@@ -386,12 +381,12 @@ way to improve them.
 
 **`hardware_map.conf` format:**
 ```
-CODENAME|PLATFORM|KERNEL_SERIES|PATCH_DIR|ARCH|NOTES
+CODENAME|PLATFORM|KERNEL_SERIES|PATCH_DIR|ARCH|DTB_PREFIX|NOTES
 ```
 
 Example:
 ```
-myboard|intel-cometlake|default|none|x86_64|Acme Chromebook XYZ
+myboard|intel-cometlake|default|none|x86_64|none|Acme Chromebook XYZ
 ```
 
 - `CODENAME` — ChromeOS board codename (check `cat /sys/class/dmi/id/board_name`)
@@ -399,6 +394,7 @@ myboard|intel-cometlake|default|none|x86_64|Acme Chromebook XYZ
 - `KERNEL_SERIES` — use `default` unless your board needs a specific series (e.g. `6.12`)
 - `PATCH_DIR` — subdirectory under `patches/` to apply, or `none`
 - `ARCH` — `x86_64` for Intel/AMD boards
+- `DTB_PREFIX` — `none` for x86_64 boards
 - `NOTES` — human-readable device name
 
 **`configs/device/<codename>.cfg`:**
@@ -425,11 +421,12 @@ the rest.
 
 **`hardware_map.conf` entry for ARM64:**
 ```
-myboard|mediatek-mt8183|default|none|arm64|Acme Chromebook ARM
+myboard|mediatek-mt8183|default|none|arm64|mt8183-kukui|Acme Chromebook ARM
 ```
 
-Note: `ARCH` must be `arm64` — this is what tells the build workflow to
-include your device in the ARM64 matrix.
+Note: `ARCH` must be `arm64` and `DTB_PREFIX` must match the DTB glob prefix
+for your SoC (e.g. `mt8183-kukui`, `rk3399-gru`) — this is what tells the
+build workflow which device tree blobs to include in the kpart.
 
 **Platform-level patches** (mt8183 and mt81xx patches) are automatically
 pulled from the upstream hexdump0815 repo at build time — you do not need
