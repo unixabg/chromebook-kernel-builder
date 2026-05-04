@@ -3,12 +3,11 @@
 # merge_kernel_config.sh
 #
 # Merges kernel config fragments in order:
-#   1. Base config (configs/base/chromebooks-x86_64-6.19.x.cfg or defconfig)
-#   2. features/remove-generic.cfg  - strip defconfig bloat
-#   3. platform/<platform>.cfg      - SoC-specific: GPU, audio path, WiFi
-#   4. device/<codename>.cfg        - per-board overrides (optional)
-#   5. features/generic.cfg         - filesystems, networking, crypto,
-#                                     initrd compression, wifi drivers
+#   1. Base config (configs/base/chromebooks-x86_64.cfg or defconfig)
+#      Full curated Chromebook config - the single source of truth for
+#      generic options (filesystems, crypto, networking, wifi, etc.)
+#   2. platform/<platform>.cfg      - SoC-specific: GPU, audio path, WiFi
+#   3. device/<codename>.cfg        - per-board overrides (optional)
 #
 # Each fragment is a PARTIAL config: only the options you want to set/override.
 # Options not mentioned in a fragment are left as-is from previous layers.
@@ -19,7 +18,7 @@
 #       --kernel-src /path/to/linux-6.12.x \
 #       --codename treeya \
 #       --platform stoney-ridge \
-#       --base-config /path/to/configs/base/chromebooks-x86_64-6.19.x.cfg \
+#       --base-config /path/to/configs/base/chromebooks-x86_64.cfg \
 #       --output /path/to/output/.config
 # =============================================================================
 
@@ -60,17 +59,7 @@ KMERGE="${KERNEL_SRC}/scripts/kconfig/merge_config.sh"
 # =============================================================================
 FRAGMENTS=()
 
-# Layer 1: Remove generic defconfig bloat
-# Must come before base so removals take effect before additions
-REMOVE_FRAG="${REPO_DIR}/configs/features/remove-generic.cfg"
-if [[ -f "$REMOVE_FRAG" ]]; then
-    FRAGMENTS+=("$REMOVE_FRAG")
-    log "Remove fragment: $REMOVE_FRAG"
-else
-    log "WARNING: remove-generic.cfg not found at $REMOVE_FRAG"
-fi
-
-# Layer 2: Platform fragment
+# Layer 1: Platform fragment
 # SoC-specific: GPU driver, CPU frequency driver, platform audio path, WiFi
 PLATFORM_FRAG="${REPO_DIR}/configs/platform/${PLATFORM}.cfg"
 if [[ -f "$PLATFORM_FRAG" ]]; then
@@ -80,7 +69,7 @@ else
     log "WARNING: no platform fragment found at $PLATFORM_FRAG"
 fi
 
-# Layer 3: Device fragment (optional - not all codenames have one)
+# Layer 2: Device fragment (optional - not all codenames have one)
 if [[ -n "$CODENAME" ]]; then
     DEVICE_FRAG="${REPO_DIR}/configs/device/${CODENAME}.cfg"
     if [[ -f "$DEVICE_FRAG" ]]; then
@@ -91,18 +80,6 @@ if [[ -n "$CODENAME" ]]; then
     fi
 else
     log "INFO: no codename provided - skipping device layer"
-fi
-
-# Layer 4: Generic feature additions
-# Filesystems, networking, crypto, initrd compression formats, broad wifi
-# driver coverage, Android/Waydroid, security, monitoring.
-# Applied LAST so these additions survive any platform overrides.
-GENERIC_FRAG="${REPO_DIR}/configs/features/generic.cfg"
-if [[ -f "$GENERIC_FRAG" ]]; then
-    FRAGMENTS+=("$GENERIC_FRAG")
-    log "Generic features fragment: $GENERIC_FRAG"
-else
-    log "WARNING: generic.cfg not found at $GENERIC_FRAG"
 fi
 
 log "Fragment merge order:"

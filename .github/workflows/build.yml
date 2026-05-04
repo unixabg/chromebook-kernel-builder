@@ -354,7 +354,7 @@ jobs:
         run: |
           sudo chown -R "$USER:$USER" "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           chmod +x scripts/merge_kernel_config.sh
-          BASE_CFG="${GITHUB_WORKSPACE}/configs/base/chromebooks-x86_64-6.19.x.cfg"
+          BASE_CFG="${GITHUB_WORKSPACE}/configs/base/chromebooks-x86_64.cfg"
           scripts/merge_kernel_config.sh \
             --kernel-src "/var/tmp/kernel-build/linux-${KERNEL_FULL}" \
             --platform "${{ matrix.platform }}" \

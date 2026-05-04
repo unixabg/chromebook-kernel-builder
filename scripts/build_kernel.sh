@@ -74,15 +74,12 @@ if [ -d "${PATCHES}/${PLATFORM}" ]; then
     done
 fi
 
-# ── Merge configs (hexdump0815 pattern) ───────────────────────────────────────
-# Order: defconfig → base → features/remove → base x86_64 → platform → features/generic
+# ── Merge configs ─────────────────────────────────────────────────────────────
+# Order: base → platform
 echo "==> Merging kernel config..."
-scripts/kconfig/merge_config.sh -m \
-    arch/x86/configs/x86_64_defconfig \
-    "${CONFIGS}/features/remove-generic.cfg" \
-    "${CONFIGS}/base/chromebooks-x86_64.cfg" \
-    "${PLATFORM_CFG}" \
-    "${CONFIGS}/features/generic.cfg"
+cp "${CONFIGS}/base/chromebooks-x86_64.cfg" .config
+scripts/kconfig/merge_config.sh -m .config \
+    "${PLATFORM_CFG}"
 
 make olddefconfig
 
