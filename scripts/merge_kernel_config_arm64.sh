@@ -97,6 +97,32 @@ fi
 log "Running olddefconfig to adapt base config to $(basename "$KERNEL_SRC")..."
 make ARCH=arm64 olddefconfig
 
+# ── Step 2b: Apply ARM64 common fixes ────────────────────────────────────────
+# Options that may not be set in upstream base configs but are required
+# for all ARM64 Chromebook builds regardless of platform or kernel version.
+COMMON_FIXES="${REPO_DIR}/configs/base/arm64-common-fixes.cfg"
+if [[ -f "$COMMON_FIXES" ]]; then
+    log "Applying ARM64 common fixes: $COMMON_FIXES"
+    SC="${KERNEL_SRC}/scripts/config"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+        [[ "$line" == \#* && ! "$line" == *"is not set"* ]] && continue
+        if [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=([ym])$ ]]; then
+            key="${BASH_REMATCH[1]#CONFIG_}"
+            [[ "${BASH_REMATCH[2]}" == "y" ]] && "$SC" --enable "$key" || "$SC" --module "$key"
+        elif [[ "$line" =~ ^#[[:space:]]+(CONFIG_[A-Z0-9_]+)[[:space:]]+is[[:space:]]+not[[:space:]]+set ]]; then
+            "$SC" --disable "${BASH_REMATCH[1]#CONFIG_}"
+        elif [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=\"(.*)\"$ ]]; then
+            "$SC" --set-str "${BASH_REMATCH[1]#CONFIG_}" "${BASH_REMATCH[2]}"
+        elif [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=(.+)$ ]]; then
+            "$SC" --set-val "${BASH_REMATCH[1]#CONFIG_}" "${BASH_REMATCH[2]}"
+        fi
+    done < "$COMMON_FIXES"
+    make ARCH=arm64 olddefconfig
+else
+    log "INFO: no arm64-common-fixes.cfg found - skipping"
+fi
+
 # Defined here so both Step 3 and Step 4 can use it
 KMERGE="${KERNEL_SRC}/scripts/kconfig/merge_config.sh"
 
