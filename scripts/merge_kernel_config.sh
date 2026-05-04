@@ -3,12 +3,11 @@
 # merge_kernel_config.sh
 #
 # Merges kernel config fragments in order:
-#   1. Base arch defconfig
+#   1. Base config (configs/base/chromebooks-x86_64-6.19.x.cfg or defconfig)
 #   2. features/remove-generic.cfg  - strip defconfig bloat
-#   3. base/chromebooks-x86_64.cfg  - ChromeOS EC, audio, platform base
-#   4. platform/<platform>.cfg      - SoC-specific: GPU, audio path, WiFi
-#   5. device/<codename>.cfg        - per-board overrides (optional)
-#   6. features/generic.cfg         - filesystems, networking, crypto,
+#   3. platform/<platform>.cfg      - SoC-specific: GPU, audio path, WiFi
+#   4. device/<codename>.cfg        - per-board overrides (optional)
+#   5. features/generic.cfg         - filesystems, networking, crypto,
 #                                     initrd compression, wifi drivers
 #
 # Each fragment is a PARTIAL config: only the options you want to set/override.
@@ -20,7 +19,7 @@
 #       --kernel-src /path/to/linux-6.12.x \
 #       --codename treeya \
 #       --platform stoney-ridge \
-#       --base-config defconfig \
+#       --base-config /path/to/configs/base/chromebooks-x86_64-6.19.x.cfg \
 #       --output /path/to/output/.config
 # =============================================================================
 
@@ -71,17 +70,7 @@ else
     log "WARNING: remove-generic.cfg not found at $REMOVE_FRAG"
 fi
 
-# Layer 2: Base chromebook options
-# ChromeOS EC, IIO sensors, I2C, MMC, TPM, camera, full Intel SOF audio stack
-BASE_FRAG="${REPO_DIR}/configs/base/chromebooks-x86_64.cfg"
-if [[ -f "$BASE_FRAG" ]]; then
-    FRAGMENTS+=("$BASE_FRAG")
-    log "Base fragment: $BASE_FRAG"
-else
-    log "WARNING: base fragment not found at $BASE_FRAG"
-fi
-
-# Layer 3: Platform fragment
+# Layer 2: Platform fragment
 # SoC-specific: GPU driver, CPU frequency driver, platform audio path, WiFi
 PLATFORM_FRAG="${REPO_DIR}/configs/platform/${PLATFORM}.cfg"
 if [[ -f "$PLATFORM_FRAG" ]]; then
@@ -91,7 +80,7 @@ else
     log "WARNING: no platform fragment found at $PLATFORM_FRAG"
 fi
 
-# Layer 4: Device fragment (optional - not all codenames have one)
+# Layer 3: Device fragment (optional - not all codenames have one)
 if [[ -n "$CODENAME" ]]; then
     DEVICE_FRAG="${REPO_DIR}/configs/device/${CODENAME}.cfg"
     if [[ -f "$DEVICE_FRAG" ]]; then
@@ -104,7 +93,7 @@ else
     log "INFO: no codename provided - skipping device layer"
 fi
 
-# Layer 5: Generic feature additions
+# Layer 4: Generic feature additions
 # Filesystems, networking, crypto, initrd compression formats, broad wifi
 # driver coverage, Android/Waydroid, security, monitoring.
 # Applied LAST so these additions survive any platform overrides.
