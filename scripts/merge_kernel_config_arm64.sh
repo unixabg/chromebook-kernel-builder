@@ -52,11 +52,11 @@ cd "$KERNEL_SRC"
 #   1. configs/base/<platform>.config in this repo (local, versioned)
 #   2. config file from cloned external repo (ARM64_EXT_DIR)
 #      hexdump0815 naming: config.cbm (mediatek), config.rkc (rockchip), etc.
-BASE_CONFIG="${REPO_DIR}/configs/base/${PLATFORM}.config"
+BASE_CONFIG="${REPO_DIR}/configs/base/${PLATFORM}.cfg"
 EXT_DIR="${ARM64_EXT_DIR:-}"
 
-if [[ -f "$BASE_CONFIG" ]]; then
-    log "Using local base config: configs/base/${PLATFORM}.config"
+if [[ -f "$BASE_CONFIG" ]] && grep -q "^CONFIG_" "$BASE_CONFIG"; then
+    log "Using local base config: configs/base/${PLATFORM}.cfg"
     log "  ($(wc -l < "$BASE_CONFIG") lines)"
     cp "$BASE_CONFIG" .config
 elif [[ -n "$EXT_DIR" ]]; then
@@ -76,7 +76,7 @@ elif [[ -n "$EXT_DIR" ]]; then
     done
     if [[ -z "$EXT_CONFIG" ]]; then
         log "ERROR: no base config found locally or in external repo: $EXT_DIR"
-        log "  Add configs/base/${PLATFORM}.config to this repo, or ensure"
+        log "  Add configs/base/${PLATFORM}.cfg to this repo, or ensure"
         log "  the external repo contains a config.cbm/config.rkc/etc. file"
         exit 1
     fi
@@ -85,7 +85,7 @@ elif [[ -n "$EXT_DIR" ]]; then
     cp "$EXT_CONFIG" .config
 else
     log "ERROR: base config not found: $BASE_CONFIG"
-    log "  Expected a known-working config at configs/base/${PLATFORM}.config"
+    log "  Expected a known-working config at configs/base/${PLATFORM}.cfg"
     log "  Or set ARM64_EXT_DIR to a cloned external repo containing a config file"
     exit 1
 fi
@@ -215,7 +215,7 @@ fi
 
 log ""
 log "=== Config merge complete: ${KERNEL_SRC}/.config ==="
-log "=== Base: configs/base/${PLATFORM}.config + olddefconfig for $(basename "$KERNEL_SRC") ==="
+log "=== Base: configs/base/${PLATFORM}.cfg + olddefconfig for $(basename "$KERNEL_SRC") ==="
 log ""
 
 # ── Step 5: Verify critical MT8183 options ────────────────────────────────────

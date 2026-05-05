@@ -136,7 +136,7 @@ chromebook-kernel-builder/
 │   ├── base/
 │   │   ├── chromebooks-x86_64.cfg       ← Layer 0: full curated x86_64 base config
 │   │   ├── arm64-common-fixes.cfg       ← ARM64: fixes applied to all ARM64 builds
-│   │   └── mediatek-mt81xx.config       ← ARM64: local base override (empty = use hexdump's base)
+│   │   └── mediatek-mt81xx.cfg       ← ARM64: local base override (empty = use hexdump's base)
 │   ├── cmdline/
 │   │   └── chromebook-kukui.cmdline ← Kernel cmdline for MT8183 kpart
 │   ├── platform/
