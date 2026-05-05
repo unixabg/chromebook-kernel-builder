@@ -72,6 +72,8 @@ testing reports are especially welcome.
 Every kernel config is assembled from layers merged in order.
 Later layers override earlier ones for any conflicting option.
 
+### x86_64
+
 ```
 Layer 0 — BASE (always applied)
   configs/base/chromebooks-x86_64.cfg
@@ -91,6 +93,37 @@ Layer 2 — DEVICE (per board codename, optional)
 
 The merge uses the kernel's own `scripts/kconfig/merge_config.sh`.
 
+### ARM64
+
+```
+Layer 0 — BASE
+  configs/base/<platform>.config  if present and non-empty (local override)
+  OR hexdump0815's config.cbm/config.rkc from the external repo (fallback)
+  The external repo URL is set per-vendor in kernel_versions.conf:
+    ARM64_EXTERNAL_REPO_URL_MEDIATEK=https://github.com/hexdump0815/...
+
+  make ARCH=arm64 olddefconfig is run after this step to adapt the
+  base config to the kernel version being built.
+
+Layer 1 — ARM64 COMMON FIXES (always applied)
+  configs/base/arm64-common-fixes.cfg
+  Options required for all ARM64 Chromebook builds not always present
+  in upstream base configs (e.g. CONFIG_DRM_DISPLAY_DSC_HELPER).
+
+Layer 2 — EXTERNAL OPTIONS (from hexdump0815 repo, applied automatically)
+  misc.cbm/options/additional-options-special.cfg  <- additions
+  misc.cbm/options/options-to-remove-special.cfg   <- removals
+  Pulled at build time from the external repo. Not stored in this repo.
+
+Layer 3 — DEVICE (per board codename, optional)
+  configs/device/<codename>.cfg
+  Contains only options absent from or wrong in the upstream base.
+  Keep this minimal - if hexdump0815 already provides it correctly,
+  it does not need to be repeated here.
+```
+
+The ARM64 merge is handled by `scripts/merge_kernel_config_arm64.sh`.
+
 ---
 
 ## Directory Structure
@@ -101,7 +134,9 @@ chromebook-kernel-builder/
 │   ├── hardware_map.conf            ← Maps codename → platform + kernel version
 │   ├── kernel_versions.conf         ← Kernel series tracking
 │   ├── base/
-│   │   └── chromebooks-x86_64.cfg   ← Layer 0: full curated Chromebook base config
+│   │   ├── chromebooks-x86_64.cfg       ← Layer 0: full curated x86_64 base config
+│   │   ├── arm64-common-fixes.cfg       ← ARM64: fixes applied to all ARM64 builds
+│   │   └── mediatek-mt81xx.config       ← ARM64: local base override (empty = use hexdump's base)
 │   ├── cmdline/
 │   │   └── chromebook-kukui.cmdline ← Kernel cmdline for MT8183 kpart
 │   ├── platform/
@@ -110,8 +145,8 @@ chromebook-kernel-builder/
 │   │   ├── amd-ryzen-zork.cfg       ← AMD Ryzen (Zork family)
 │   │   ├── geminilake.cfg           ← Intel GeminiLake (PHASER360)
 │   │   ├── intel-braswell.cfg       ← Intel Braswell (STRAGO)
-│   │   ├── intel-cometlake.cfg      ← Intel 10th Gen (HATCH)
-│   │   └── mediatek-mt8183.cfg      ← MediaTek MT8183 (KUKUI)
+│   │   └── intel-cometlake.cfg      ← Intel 10th Gen (HATCH)
+│   │   (ARM64 has no platform cfg - base comes from hexdump0815 external repo)
 │   └── device/
 │       ├── aleena.cfg               ← Acer CB315-2H (DA7219 codec)
 │       ├── treeya.cfg               ← Lenovo 300e Gen2 AMD (RT5682 codec)
@@ -410,18 +445,27 @@ ARM64 builds run entirely through GitHub Actions — there is no local build
 script. Adding a device means adding config files; the CI pipeline handles
 the rest.
 
+**Config layering for ARM64** — understand this before creating files:
+
+The base config comes automatically from hexdump0815's external repo
+(`config.cbm` for MediaTek, `config.rkc` for Rockchip). You do not need
+to copy or maintain this. On top of that, `arm64-common-fixes.cfg` and
+hexdump's special options are applied automatically. Your `configs/device/
+<codename>.cfg` is applied last and should contain **only** options that
+are absent from or wrong in hexdump's base. Keep it minimal.
+
 **Files to edit or create:**
 
 | File | Required | What to do |
 |---|---|---|
 | `configs/hardware_map.conf` | ✅ | Add one line for your board |
-| `configs/device/<codename>.cfg` | ✅ | Create with any board-specific overrides (can be empty) |
+| `configs/device/<codename>.cfg` | ✅ | Create with board-specific overrides only (can be empty) |
 | `configs/cmdline/<codename>.cmdline` | only if needed | Create if your board needs different kernel parameters than the platform default |
 | `patches/<platform>/` | only if needed | Drop a `.patch` file here for device-specific kernel patches |
 
 **`hardware_map.conf` entry for ARM64:**
 ```
-myboard|mediatek-mt8183|default|none|arm64|mt8183-kukui|Acme Chromebook ARM
+myboard|mediatek-mt81xx|default|none|arm64|mt8183-kukui|Acme Chromebook ARM
 ```
 
 Note: `ARCH` must be `arm64` and `DTB_PREFIX` must match the DTB glob prefix
@@ -494,9 +538,9 @@ tracking community coverage across devices.
 
 ### ARM64
 
-| Platform config | Chromebook family | Devices | Notes |
-|---|---|---|---|
-| `mediatek-mt8183.cfg` | KUKUI | HP 11MK G9 EE (esche), Acer 311, Lenovo Duet, Lenovo 10e | velvet-os + velvet-tools required |
+| Codename | Device | SoC | Base config | Notes |
+|---|---|---|---|---|
+| `esche` | HP Chromebook 11MK G9 EE | MT8183 | hexdump0815 config.cbm | velvet-os + velvet-tools required |
 
 ---
 
