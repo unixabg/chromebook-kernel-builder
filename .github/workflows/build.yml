@@ -416,7 +416,7 @@ jobs:
           find /var/tmp/kernel-build -maxdepth 1 -name "*.deb" \
             -exec cp {} output/ \;
           cp "/var/tmp/kernel-build/linux-${KERNEL_FULL}/.config" \
-            "output/config-${KERNEL_FULL}-${PLATFORM}
+            "output/config-${KERNEL_FULL}-${PLATFORM}"
           echo "Output files:"
           ls -lh output/
 
