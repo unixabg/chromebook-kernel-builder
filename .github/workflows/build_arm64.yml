@@ -616,9 +616,35 @@ jobs:
 
             Devices are driven by `configs/hardware_map.conf` (arch=arm64 entries).
 
-            ### Installation
+            ### Installation (velvet-os + velvet-tools)
+
+            Tarball naming: `<kver>-<dtb-prefix>-<codename>-velvet-os-<date>-r<N>.tar.gz`
+            Kernel version string: `<kver>-chromebook-<dtb-prefix>-velvet-os`
+
             ```bash
-            sudo tar xzf <tarball>.tar.gz -C /
+            sudo tar xzf <kver>-<dtb-prefix>-<codename>-velvet-os-<date>-r<N>.tar.gz -C /
+            sudo vtlist
+            # note the kernel version listed, then:
+            sudo vtbuild <kver>-chromebook-<dtb-prefix>-velvet-os
+            sudo reboot
+            ```
+
+            Example for esche (MT8183):
+            ```bash
+            sudo tar xzf 7.0.3-mt8183-kukui-esche-velvet-os-20260506-r47.tar.gz -C /
+            sudo vtbuild 7.0.3-chromebook-mt8183-kukui-velvet-os
+            sudo reboot
+            ```
+
+            If `init_gen_hook=y` is set in `/etc/velvettools/config` (default),
+            vtbuild runs automatically after extraction — skip that step if so.
+
+            ### Installation (manual kpart flash)
+
+            For non-velvet-os systems or manual installs:
+
+            ```bash
+            sudo tar xzf <kver>-<dtb-prefix>-<codename>-velvet-os-<date>-r<N>.tar.gz -C /
             KERN=$(cgpt find -t kernel /dev/mmcblk1 | head -1)
             sudo dd if=/boot/vmlinux.kpart-<kver> of="${KERN}" bs=4M
             sudo cgpt add -i "${KERN##*p}" -P 15 -T 1 -S 1 /dev/mmcblk1

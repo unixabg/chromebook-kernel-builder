@@ -309,32 +309,57 @@ Community testing reports are welcome — see [Contributing](#contributing).
 See [velvet-tools](https://github.com/velvet-os/velvet-tools) for
 installation instructions.
 
+**Tarball naming convention:**
+```
+<kver>-<dtb-prefix>-<codename>-velvet-os-<date>-r<N>.tar.gz
+
+Example:
+7.0.3-mt8183-kukui-esche-velvet-os-20260506-r47.tar.gz
+```
+
+The kernel version string inside the tarball follows this pattern:
+```
+<kver>-chromebook-<dtb-prefix>-velvet-os
+
+Example:
+7.0.3-chromebook-mt8183-kukui-velvet-os
+```
+
 **1. Download the tarball** from the [Releases](../../releases) page and
 extract it to the root of your velvet-os install:
 
 ```bash
-sudo tar xzf <kver>-velvet-os-<date>.tar.gz -C /
+sudo tar xzf 7.0.3-mt8183-kukui-esche-velvet-os-<date>-r<N>.tar.gz -C /
 ```
 
 This places the kernel Image, DTBs, modules, and kpart under `/boot` and
 `/lib/modules`.
 
-**2. Generate the initramfs** — required for USB boot. Without it the
-system will hang waiting for storage to enumerate:
+**2. Check what was installed:**
 
 ```bash
-sudo update-initramfs -c -k <kver>
+sudo vtlist
 ```
 
-**3. velvet-tools takes over** — if `init_gen_hook=y` is set in
-`/etc/velvettools/config` (the default), velvet-tools automatically
-rebuilds the kpart with the new initramfs and test-flashes it to the
-secondary kernel partition (`sda2`).
+Look for the newly extracted kernel — it will appear as:
+`7.0.3-chromebook-mt8183-kukui-velvet-os`
+
+**3. Build and flash the kpart:**
+
+```bash
+sudo vtbuild 7.0.3-chromebook-mt8183-kukui-velvet-os
+```
+
+`vtbuild` rebuilds the signed kpart incorporating the correct cmdline
+(including `KERNEL_HASH` and `ipv6.disable=1`) and test-flashes it to
+the secondary kernel partition. If `init_gen_hook=y` is set in
+`/etc/velvettools/config` (the default), this step runs automatically
+after the tar extraction — you can skip it if so.
 
 **4. Reboot** — depthcharge boots once from the secondary partition.
 On successful boot, `vtcheck` permanently promotes the new kernel to
-the primary partition (`sda1`). If the boot fails, depthcharge
-automatically falls back to the previous kernel on the next boot.
+the primary partition. If the boot fails, depthcharge automatically
+falls back to the previous kernel on the next boot.
 
 ```bash
 sudo reboot
