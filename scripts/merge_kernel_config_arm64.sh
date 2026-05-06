@@ -2,16 +2,28 @@
 # =============================================================================
 # scripts/merge_kernel_config_arm64.sh
 #
-# ARM64-only config merge. Kept separate from merge_kernel_config.sh so the
-# working x86_64 pipeline is never touched.
+# ARM64-only config merge. Replicates hexdump0815's exact pipeline then
+# applies local fixes and device overrides on top.
 #
-# Strategy:
-#   1. Use configs/base/<platform>.config as the base (known-working config)
-#   2. make ARCH=arm64 olddefconfig  -- adapts it to whatever kernel version
-#      we are actually building (fills new symbols with Kconfig defaults,
-#      drops removed symbols)
-#   3. Apply configs/device/<codename>.cfg if it exists (optional overrides)
-#   4. Verify critical MT8183 options are present, warn on anything missing
+# Strategy (mirrors hexdump0815 readme.mt8 pipeline):
+#   1. ARM64 defconfig as starting point
+#   2. kernel-config-options/chromebooks-aarch64.cfg
+#   3. kernel-config-options/<platform-short>.cfg  (e.g. mediatek.cfg)
+#   4. kernel-config-options/docker-options.cfg
+#   5. kernel-config-options/options-to-remove-generic.cfg
+#   6. misc.cbm/options/options-to-remove-special.cfg
+#   7. kernel-config-options/additional-options-generic.cfg
+#   8. kernel-config-options/additional-options-aarch64.cfg
+#   9. misc.cbm/options/additional-options-special.cfg
+#  10. make ARCH=arm64 olddefconfig
+#  11. configs/base/arm64-common-fixes.cfg  (our fixes, applied LAST)
+#  12. configs/device/<codename>.cfg        (device overrides, applied LAST)
+#  13. make ARCH=arm64 olddefconfig
+#  14. Verify critical options
+#
+# Fallback (when ARM64_KCO_DIR not set):
+#   Uses configs/base/<platform>.cfg if it has CONFIG_ lines,
+#   otherwise uses hexdump's config.cbm from ARM64_EXT_DIR.
 #
 # Usage:
 #   ./scripts/merge_kernel_config_arm64.sh \
@@ -47,166 +59,181 @@ log() { echo "[merge_config_arm64] $*"; }
 
 cd "$KERNEL_SRC"
 
-# ── Step 1: Copy known-working base config ────────────────────────────────────
-# Priority:
-#   1. configs/base/<platform>.config in this repo (local, versioned)
-#   2. config file from cloned external repo (ARM64_EXT_DIR)
-#      hexdump0815 naming: config.cbm (mediatek), config.rkc (rockchip), etc.
-BASE_CONFIG="${REPO_DIR}/configs/base/${PLATFORM}.cfg"
+KMERGE="${KERNEL_SRC}/scripts/kconfig/merge_config.sh"
+KCO_DIR="${ARM64_KCO_DIR:-}"
 EXT_DIR="${ARM64_EXT_DIR:-}"
 
-if [[ -f "$BASE_CONFIG" ]] && grep -q "^CONFIG_" "$BASE_CONFIG"; then
-    log "Using local base config: configs/base/${PLATFORM}.cfg"
-    log "  ($(wc -l < "$BASE_CONFIG") lines)"
-    cp "$BASE_CONFIG" .config
-elif [[ -n "$EXT_DIR" ]]; then
-    log "No local base config for ${PLATFORM} - searching external repo..."
-    # Try common hexdump0815 config file naming patterns
-    EXT_CONFIG=""
-    for candidate in \
-        "${EXT_DIR}/config.cbm" \
-        "${EXT_DIR}/config.rkc" \
-        "${EXT_DIR}/config.rk3" \
-        "${EXT_DIR}/config.mt8" \
-        "${EXT_DIR}/config.mt7"; do
-        if [[ -f "$candidate" ]]; then
-            EXT_CONFIG="$candidate"
+# Detect the misc subdir in the external repo (misc.cbm, misc.rkc, etc.)
+MISC_OPTIONS_DIR=""
+if [[ -n "$EXT_DIR" ]]; then
+    for subdir in misc.cbm misc.rkc misc.rk3 misc; do
+        if [[ -d "${EXT_DIR}/${subdir}/options" ]]; then
+            MISC_OPTIONS_DIR="${EXT_DIR}/${subdir}/options"
             break
         fi
     done
-    if [[ -z "$EXT_CONFIG" ]]; then
-        log "ERROR: no base config found locally or in external repo: $EXT_DIR"
-        log "  Add configs/base/${PLATFORM}.cfg to this repo, or ensure"
-        log "  the external repo contains a config.cbm/config.rkc/etc. file"
-        exit 1
-    fi
-    log "Using external base config: $(basename "$EXT_CONFIG")"
-    log "  ($(wc -l < "$EXT_CONFIG") lines)"
-    cp "$EXT_CONFIG" .config
-else
-    log "ERROR: base config not found: $BASE_CONFIG"
-    log "  Expected a known-working config at configs/base/${PLATFORM}.cfg"
-    log "  Or set ARM64_EXT_DIR to a cloned external repo containing a config file"
-    exit 1
 fi
 
-# ── Step 2: olddefconfig ──────────────────────────────────────────────────────
-# Adapts the base config to the kernel version we are actually building.
-# New symbols introduced since the base config was made get their Kconfig
-# default values. Removed symbols are dropped cleanly.
-log "Running olddefconfig to adapt base config to $(basename "$KERNEL_SRC")..."
-make ARCH=arm64 olddefconfig
+# Derive short platform name for kernel-config-options file lookup
+# mediatek-mt81xx -> mediatek,  rockchip-rk33xx -> rockchip
+PLATFORM_SHORT=$(echo "$PLATFORM" | cut -d- -f1)
 
-# ── Step 2b: Apply ARM64 common fixes ────────────────────────────────────────
-# Options that may not be set in upstream base configs but are required
-# for all ARM64 Chromebook builds regardless of platform or kernel version.
+# =============================================================================
+# Primary pipeline: replicate hexdump0815's exact layer order
+# =============================================================================
+if [[ -n "$KCO_DIR" ]]; then
+    log "Using hexdump0815 pipeline (kernel-config-options + external repo)"
+    log "  KCO_DIR : $KCO_DIR"
+    log "  EXT_DIR : ${EXT_DIR:-none}"
+    log "  MISC_DIR: ${MISC_OPTIONS_DIR:-none}"
+
+    # Step 1: Start from ARM64 defconfig
+    log "Starting from ARM64 defconfig..."
+    make ARCH=arm64 defconfig
+
+    # Build fragment list in hexdump's exact order
+    FRAGMENTS=()
+
+    # chromebooks-aarch64.cfg - generic Chromebook ARM64 options
+    [[ -f "${KCO_DIR}/chromebooks-aarch64.cfg" ]] && \
+        FRAGMENTS+=("${KCO_DIR}/chromebooks-aarch64.cfg") && \
+        log "  + chromebooks-aarch64.cfg"
+
+    # <platform>.cfg - platform-specific options (mediatek.cfg, rockchip.cfg etc.)
+    [[ -f "${KCO_DIR}/${PLATFORM_SHORT}.cfg" ]] && \
+        FRAGMENTS+=("${KCO_DIR}/${PLATFORM_SHORT}.cfg") && \
+        log "  + ${PLATFORM_SHORT}.cfg"
+
+    # docker-options.cfg - container support
+    [[ -f "${KCO_DIR}/docker-options.cfg" ]] && \
+        FRAGMENTS+=("${KCO_DIR}/docker-options.cfg") && \
+        log "  + docker-options.cfg"
+
+    # options-to-remove-generic.cfg - generic removals
+    [[ -f "${KCO_DIR}/options-to-remove-generic.cfg" ]] && \
+        FRAGMENTS+=("${KCO_DIR}/options-to-remove-generic.cfg") && \
+        log "  + options-to-remove-generic.cfg"
+
+    # options-to-remove-special.cfg - platform-specific removals
+    [[ -n "$MISC_OPTIONS_DIR" && -f "${MISC_OPTIONS_DIR}/options-to-remove-special.cfg" ]] && \
+        FRAGMENTS+=("${MISC_OPTIONS_DIR}/options-to-remove-special.cfg") && \
+        log "  + options-to-remove-special.cfg (external)"
+
+    # additional-options-generic.cfg - generic additions
+    [[ -f "${KCO_DIR}/additional-options-generic.cfg" ]] && \
+        FRAGMENTS+=("${KCO_DIR}/additional-options-generic.cfg") && \
+        log "  + additional-options-generic.cfg"
+
+    # additional-options-aarch64.cfg - ARM64-specific additions
+    [[ -f "${KCO_DIR}/additional-options-aarch64.cfg" ]] && \
+        FRAGMENTS+=("${KCO_DIR}/additional-options-aarch64.cfg") && \
+        log "  + additional-options-aarch64.cfg"
+
+    # additional-options-special.cfg - platform-specific additions
+    [[ -n "$MISC_OPTIONS_DIR" && -f "${MISC_OPTIONS_DIR}/additional-options-special.cfg" ]] && \
+        FRAGMENTS+=("${MISC_OPTIONS_DIR}/additional-options-special.cfg") && \
+        log "  + additional-options-special.cfg (external)"
+
+    # Apply all fragments in one merge_config.sh call (hexdump's approach)
+    if [[ ${#FRAGMENTS[@]} -gt 0 ]]; then
+        if [[ -x "$KMERGE" ]]; then
+            log "Merging ${#FRAGMENTS[@]} fragments..."
+            ARCH=arm64 "${KMERGE}" -m -r .config "${FRAGMENTS[@]}"
+            [[ -f ".config.new" ]] && mv .config.new .config
+        else
+            log "ERROR: merge_config.sh not found at $KMERGE"
+            exit 1
+        fi
+    fi
+
+    log "Running olddefconfig..."
+    make ARCH=arm64 olddefconfig
+
+# =============================================================================
+# Fallback pipeline: no kernel-config-options repo available
+# =============================================================================
+else
+    log "WARNING: ARM64_KCO_DIR not set - falling back to base config pipeline"
+    BASE_CONFIG="${REPO_DIR}/configs/base/${PLATFORM}.cfg"
+
+    if [[ -f "$BASE_CONFIG" ]] && grep -q "^CONFIG_" "$BASE_CONFIG"; then
+        log "Using local base config: configs/base/${PLATFORM}.cfg"
+        cp "$BASE_CONFIG" .config
+    elif [[ -n "$EXT_DIR" ]]; then
+        log "Searching external repo for base config..."
+        EXT_CONFIG=""
+        for candidate in \
+            "${EXT_DIR}/config.cbm" \
+            "${EXT_DIR}/config.rkc" \
+            "${EXT_DIR}/config.rk3" \
+            "${EXT_DIR}/config.mt8" \
+            "${EXT_DIR}/config.mt7"; do
+            if [[ -f "$candidate" ]]; then
+                EXT_CONFIG="$candidate"
+                break
+            fi
+        done
+        [[ -z "$EXT_CONFIG" ]] && { log "ERROR: no base config found"; exit 1; }
+        log "Using external base config: $(basename "$EXT_CONFIG")"
+        cp "$EXT_CONFIG" .config
+    else
+        log "ERROR: no base config available - set ARM64_KCO_DIR or ARM64_EXT_DIR"
+        exit 1
+    fi
+
+    log "Running olddefconfig..."
+    make ARCH=arm64 olddefconfig
+
+    # Apply external special options in fallback mode
+    if [[ -n "$MISC_OPTIONS_DIR" ]]; then
+        log "Applying external special options..."
+        RM_CFG="${MISC_OPTIONS_DIR}/options-to-remove-special.cfg"
+        ADD_CFG="${MISC_OPTIONS_DIR}/additional-options-special.cfg"
+        if [[ -f "$ADD_CFG" && -x "$KMERGE" ]]; then
+            ARCH=arm64 "${KMERGE}" -m -r .config "$ADD_CFG"
+            [[ -f ".config.new" ]] && mv .config.new .config
+            make ARCH=arm64 olddefconfig
+        fi
+        if [[ -f "$RM_CFG" ]]; then
+            SC="${KERNEL_SRC}/scripts/config"
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                [[ -z "${line//[[:space:]]/}" ]] && continue
+                [[ "$line" == \#* && ! "$line" == *"is not set"* ]] && continue
+                if [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=n$ ]]; then
+                    "$SC" --disable "${BASH_REMATCH[1]#CONFIG_}"
+                elif [[ "$line" =~ ^#[[:space:]]+(CONFIG_[A-Z0-9_]+)[[:space:]]+is[[:space:]]+not[[:space:]]+set ]]; then
+                    "$SC" --disable "${BASH_REMATCH[1]#CONFIG_}"
+                fi
+            done < "$RM_CFG"
+            make ARCH=arm64 olddefconfig
+        fi
+    fi
+fi
+
+# =============================================================================
+# Our additions — applied LAST so they cannot be overridden by any external layer
+# =============================================================================
+
+# ARM64 common fixes (fixes for issues found in hexdump's pipeline — PR candidates)
 COMMON_FIXES="${REPO_DIR}/configs/base/arm64-common-fixes.cfg"
 if [[ -f "$COMMON_FIXES" ]]; then
     log "Applying ARM64 common fixes: $COMMON_FIXES"
-    SC="${KERNEL_SRC}/scripts/config"
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ -z "${line//[[:space:]]/}" ]] && continue
-        [[ "$line" == \#* && ! "$line" == *"is not set"* ]] && continue
-        if [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=([ym])$ ]]; then
-            key="${BASH_REMATCH[1]#CONFIG_}"
-            [[ "${BASH_REMATCH[2]}" == "y" ]] && "$SC" --enable "$key" || "$SC" --module "$key"
-        elif [[ "$line" =~ ^#[[:space:]]+(CONFIG_[A-Z0-9_]+)[[:space:]]+is[[:space:]]+not[[:space:]]+set ]]; then
-            "$SC" --disable "${BASH_REMATCH[1]#CONFIG_}"
-        elif [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=\"(.*)\"$ ]]; then
-            "$SC" --set-str "${BASH_REMATCH[1]#CONFIG_}" "${BASH_REMATCH[2]}"
-        elif [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=(.+)$ ]]; then
-            "$SC" --set-val "${BASH_REMATCH[1]#CONFIG_}" "${BASH_REMATCH[2]}"
-        fi
-    done < "$COMMON_FIXES"
+    if [[ -x "$KMERGE" ]]; then
+        ARCH=arm64 "${KMERGE}" -m -r .config "$COMMON_FIXES"
+        [[ -f ".config.new" ]] && mv .config.new .config
+    fi
     make ARCH=arm64 olddefconfig
 else
     log "INFO: no arm64-common-fixes.cfg found - skipping"
 fi
 
-# Defined here so both Step 3 and Step 4 can use it
-KMERGE="${KERNEL_SRC}/scripts/kconfig/merge_config.sh"
-
-# ── Step 3: Optional external config options (hexdump0815 misc.cbm/options/) ──
-# If ARM64_EXT_DIR is set (populated by the workflow clone step), apply
-# additional-options-special.cfg and process options-to-remove-special.cfg.
-# This keeps us in sync with hexdump0815's known-working config fragment
-# without manually copying files into this repo.
-EXT_DIR="${ARM64_EXT_DIR:-}"
-if [[ -n "$EXT_DIR" && -d "${EXT_DIR}/misc.cbm/options" ]]; then
-    OPTIONS_DIR="${EXT_DIR}/misc.cbm/options"
-    log "Applying external config options from: $OPTIONS_DIR"
-
-    # additions
-    ADD_CFG="${OPTIONS_DIR}/additional-options-special.cfg"
-    if [[ -f "$ADD_CFG" ]]; then
-        log "  additional-options-special.cfg ($(wc -l < "$ADD_CFG") lines)"
-        if [[ -x "$KMERGE" ]]; then
-            ARCH=arm64 "${KMERGE}" -m -r .config "$ADD_CFG"
-            [[ -f ".config.new" ]] && mv .config.new .config
-        else
-            SC="${KERNEL_SRC}/scripts/config"
-            while IFS= read -r line || [[ -n "$line" ]]; do
-                [[ -z "${line//[[:space:]]/}" ]] && continue
-                [[ "$line" == \#* && ! "$line" == *"is not set"* ]] && continue
-                if [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=([ym])$ ]]; then
-                    key="${BASH_REMATCH[1]#CONFIG_}"
-                    [[ "${BASH_REMATCH[2]}" == "y" ]] && "$SC" --enable "$key" || "$SC" --module "$key"
-                elif [[ "$line" =~ ^#[[:space:]]+(CONFIG_[A-Z0-9_]+)[[:space:]]+is[[:space:]]+not[[:space:]]+set ]]; then
-                    "$SC" --disable "${BASH_REMATCH[1]#CONFIG_}"
-                elif [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=\"(.*)\"$ ]]; then
-                    "$SC" --set-str "${BASH_REMATCH[1]#CONFIG_}" "${BASH_REMATCH[2]}"
-                elif [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=(.+)$ ]]; then
-                    "$SC" --set-val "${BASH_REMATCH[1]#CONFIG_}" "${BASH_REMATCH[2]}"
-                fi
-            done < "$ADD_CFG"
-        fi
-        make ARCH=arm64 olddefconfig
-    fi
-
-    # removals (lines like CONFIG_FOO=n or # CONFIG_FOO is not set)
-    RM_CFG="${OPTIONS_DIR}/options-to-remove-special.cfg"
-    if [[ -f "$RM_CFG" ]]; then
-        log "  options-to-remove-special.cfg ($(wc -l < "$RM_CFG") lines)"
-        SC="${KERNEL_SRC}/scripts/config"
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            [[ -z "${line//[[:space:]]/}" ]] && continue
-            [[ "$line" == \#* && ! "$line" == *"is not set"* ]] && continue
-            if [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=n$ ]]; then
-                "$SC" --disable "${BASH_REMATCH[1]#CONFIG_}"
-            elif [[ "$line" =~ ^#[[:space:]]+(CONFIG_[A-Z0-9_]+)[[:space:]]+is[[:space:]]+not[[:space:]]+set ]]; then
-                "$SC" --disable "${BASH_REMATCH[1]#CONFIG_}"
-            fi
-        done < "$RM_CFG"
-        make ARCH=arm64 olddefconfig
-    fi
-else
-    log "INFO: ARM64_EXT_DIR not set or missing misc.cbm/options - skipping external config fragments"
-fi
-
-# ── Step 4: Optional device overlay ──────────────────────────────────────────
+# Device overlay
 DEVICE_FRAG="${REPO_DIR}/configs/device/${CODENAME}.cfg"
-
 if [[ -f "$DEVICE_FRAG" ]]; then
     log "Applying device overlay: $DEVICE_FRAG"
     if [[ -x "$KMERGE" ]]; then
         ARCH=arm64 "${KMERGE}" -m -r .config "$DEVICE_FRAG"
         [[ -f ".config.new" ]] && mv .config.new .config
-    else
-        SC="${KERNEL_SRC}/scripts/config"
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            [[ -z "${line//[[:space:]]/}" ]] && continue
-            [[ "$line" == \#* && ! "$line" == *"is not set"* ]] && continue
-            if [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=([ym])$ ]]; then
-                key="${BASH_REMATCH[1]#CONFIG_}"
-                [[ "${BASH_REMATCH[2]}" == "y" ]] && "$SC" --enable "$key" || "$SC" --module "$key"
-            elif [[ "$line" =~ ^#[[:space:]]+(CONFIG_[A-Z0-9_]+)[[:space:]]+is[[:space:]]+not[[:space:]]+set ]]; then
-                "$SC" --disable "${BASH_REMATCH[1]#CONFIG_}"
-            elif [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=\"(.*)\"$ ]]; then
-                "$SC" --set-str "${BASH_REMATCH[1]#CONFIG_}" "${BASH_REMATCH[2]}"
-            elif [[ "$line" =~ ^(CONFIG_[A-Z0-9_]+)=(.+)$ ]]; then
-                "$SC" --set-val "${BASH_REMATCH[1]#CONFIG_}" "${BASH_REMATCH[2]}"
-            fi
-        done < "$DEVICE_FRAG"
     fi
     make ARCH=arm64 olddefconfig
 else
@@ -215,7 +242,7 @@ fi
 
 log ""
 log "=== Config merge complete: ${KERNEL_SRC}/.config ==="
-log "=== Base: configs/base/${PLATFORM}.cfg + olddefconfig for $(basename "$KERNEL_SRC") ==="
+log "=== Pipeline: hexdump0815 layers + arm64-common-fixes + device overlay ==="
 log ""
 
 # ── Step 5: Verify critical MT8183 options ────────────────────────────────────
@@ -259,8 +286,9 @@ verify_config() {
             check_ym "CONFIG_CROS_EC_SPI"       "EC SPI transport missing"
 
             log "  -- Display --"
-            check_ym "CONFIG_DRM_PANFROST"      "GPU unavailable"
-            check_ym "CONFIG_DRM_MEDIATEK"      "display engine unavailable"
+            check_ym "CONFIG_DRM_PANFROST"           "GPU unavailable"
+            check_ym "CONFIG_DRM_MEDIATEK"           "display engine unavailable"
+            check_y  "CONFIG_DRM_DISPLAY_DSC_HELPER" "panel-ilitek-ili9882t will fail to link on 7.0+"
 
             log "  -- Audio --"
             check_ym "CONFIG_SND_SOC_MT8183"    "audio platform driver missing"
@@ -279,7 +307,9 @@ verify_config() {
 
     log ""
     if [[ "$warnings" -gt 0 ]]; then
-        log "  ${warnings} WARNING(s) - add missing options to configs/device/${CODENAME}.cfg"
+        log "  ${warnings} WARNING(s) - build aborted"
+        log "  Add missing options to configs/base/arm64-common-fixes.cfg or configs/device/${CODENAME}.cfg"
+        exit 1
     else
         log "  All critical options present"
     fi

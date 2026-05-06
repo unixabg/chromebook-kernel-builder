@@ -95,32 +95,61 @@ The merge uses the kernel's own `scripts/kconfig/merge_config.sh`.
 
 ### ARM64
 
+The ARM64 pipeline replicates hexdump0815's exact build process, then adds
+local fixes and device overrides on top. Two repos are cloned at build time:
+
 ```
-Layer 0 — BASE
-  configs/base/<platform>.config  if present and non-empty (local override)
-  OR hexdump0815's config.cbm/config.rkc from the external repo (fallback)
-  The external repo URL is set per-vendor in kernel_versions.conf:
-    ARM64_EXTERNAL_REPO_URL_MEDIATEK=https://github.com/hexdump0815/...
+ARM64_EXTERNAL_REPO_URL_MEDIATEK  → linux-mainline-mediatek-mt81xx-kernel
+ARM64_KERNEL_CONFIG_OPTIONS_URL   → kernel-config-options
+```
 
-  make ARCH=arm64 olddefconfig is run after this step to adapt the
-  base config to the kernel version being built.
+Layer order (mirrors hexdump0815's readme.mt8 pipeline exactly):
 
-Layer 1 — ARM64 COMMON FIXES (always applied)
+```
+Layer 0 — ARM64 DEFCONFIG
+  arch/arm64/configs/defconfig
+  Standard ARM64 starting point, same as hexdump's pipeline.
+
+Layer 1 — GENERIC CHROMEBOOK ARM64
+  kernel-config-options/chromebooks-aarch64.cfg
+
+Layer 2 — PLATFORM SPECIFIC
+  kernel-config-options/mediatek.cfg  (or rockchip.cfg etc.)
+
+Layer 3 — DOCKER / CONTAINER SUPPORT
+  kernel-config-options/docker-options.cfg
+
+Layer 4 — GENERIC REMOVALS
+  kernel-config-options/options-to-remove-generic.cfg
+
+Layer 5 — PLATFORM REMOVALS
+  misc.cbm/options/options-to-remove-special.cfg
+
+Layer 6 — GENERIC ADDITIONS
+  kernel-config-options/additional-options-generic.cfg
+
+Layer 7 — ARM64 ADDITIONS
+  kernel-config-options/additional-options-aarch64.cfg
+
+Layer 8 — PLATFORM ADDITIONS
+  misc.cbm/options/additional-options-special.cfg
+
+  make ARCH=arm64 olddefconfig run after all hexdump layers.
+
+Layer 9 — ARM64 COMMON FIXES (our additions, applied LAST)
   configs/base/arm64-common-fixes.cfg
-  Options required for all ARM64 Chromebook builds not always present
-  in upstream base configs (e.g. CONFIG_DRM_DISPLAY_DSC_HELPER).
+  Fixes for issues found in hexdump's pipeline. These are candidates
+  to PR back to hexdump0815's kernel-config-options repo.
 
-Layer 2 — EXTERNAL OPTIONS (from hexdump0815 repo, applied automatically)
-  misc.cbm/options/additional-options-special.cfg  <- additions
-  misc.cbm/options/options-to-remove-special.cfg   <- removals
-  Pulled at build time from the external repo. Not stored in this repo.
-
-Layer 3 — DEVICE (per board codename, optional)
+Layer 10 — DEVICE (per board codename, optional)
   configs/device/<codename>.cfg
-  Contains only options absent from or wrong in the upstream base.
-  Keep this minimal - if hexdump0815 already provides it correctly,
-  it does not need to be repeated here.
+  Only options absent from or wrong in hexdump's full stack.
+  Keep this minimal.
 ```
+
+Fallback: if `ARM64_KERNEL_CONFIG_OPTIONS_URL` is not set, the pipeline
+falls back to using `configs/base/<platform>.cfg` (if it contains CONFIG_
+lines) or hexdump's `config.cbm` directly.
 
 The ARM64 merge is handled by `scripts/merge_kernel_config_arm64.sh`.
 
@@ -132,11 +161,11 @@ The ARM64 merge is handled by `scripts/merge_kernel_config_arm64.sh`.
 chromebook-kernel-builder/
 ├── configs/
 │   ├── hardware_map.conf            ← Maps codename → platform + kernel version
-│   ├── kernel_versions.conf         ← Kernel series tracking
+│   ├── kernel_versions.conf         ← Kernel series + external repo URLs
 │   ├── base/
 │   │   ├── chromebooks-x86_64.cfg       ← Layer 0: full curated x86_64 base config
-│   │   ├── arm64-common-fixes.cfg       ← ARM64: fixes applied to all ARM64 builds
-│   │   └── mediatek-mt81xx.cfg       ← ARM64: local base override (empty = use hexdump's base)
+│   │   ├── arm64-common-fixes.cfg       ← ARM64: fixes for hexdump pipeline (PR candidates)
+│   │   └── mediatek-mt81xx.cfg          ← ARM64: placeholder (populate to override hexdump base)
 │   ├── cmdline/
 │   │   └── chromebook-kukui.cmdline ← Kernel cmdline for MT8183 kpart
 │   ├── platform/
@@ -447,12 +476,18 @@ the rest.
 
 **Config layering for ARM64** — understand this before creating files:
 
-The base config comes automatically from hexdump0815's external repo
-(`config.cbm` for MediaTek, `config.rkc` for Rockchip). You do not need
-to copy or maintain this. On top of that, `arm64-common-fixes.cfg` and
-hexdump's special options are applied automatically. Your `configs/device/
-<codename>.cfg` is applied last and should contain **only** options that
-are absent from or wrong in hexdump's base. Keep it minimal.
+The pipeline replicates hexdump0815's exact build process using two repos
+cloned automatically at build time — you do not need to copy or maintain
+any of those files. Your only contributions are:
+
+- `configs/base/arm64-common-fixes.cfg` — for fixes that apply to all ARM64
+  builds and should eventually be PRed back to hexdump0815
+- `configs/device/<codename>.cfg` — for options specific to one board that
+  hexdump's full stack doesn't set correctly
+
+Both are applied last, after all of hexdump's layers, so they cannot be
+overridden. Keep device configs minimal — if hexdump already provides it
+correctly, don't repeat it here.
 
 **Files to edit or create:**
 

@@ -310,6 +310,26 @@ jobs:
           git clone --depth=1 "$EXT_URL" "$EXT_DIR"
           echo "ARM64_EXT_DIR=${EXT_DIR}" >> "$GITHUB_ENV"
 
+      # --------------------------------------------------------
+      # Clone hexdump0815/kernel-config-options
+      # Provides generic ARM64 Chromebook config fragments used
+      # by hexdump's pipeline: chromebooks-aarch64.cfg, mediatek.cfg,
+      # docker-options.cfg, additional-options-generic.cfg, etc.
+      # --------------------------------------------------------
+      - name: Clone kernel-config-options
+        run: |
+          KCO_URL=$(grep "^ARM64_KERNEL_CONFIG_OPTIONS_URL=" configs/kernel_versions.conf \
+                    | cut -d= -f2-)
+          if [[ -z "$KCO_URL" ]]; then
+            echo "ARM64_KERNEL_CONFIG_OPTIONS_URL not set - skipping"
+            echo "ARM64_KCO_DIR=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          KCO_DIR="/var/tmp/arm64-kco-src"
+          echo "Cloning $KCO_URL ..."
+          git clone --depth=1 "$KCO_URL" "$KCO_DIR"
+          echo "ARM64_KCO_DIR=${KCO_DIR}" >> "$GITHUB_ENV"
+
           # Check for patch subdir - naming varies by repo (misc.cbm, misc.rkc etc.)
           for subdir in misc.cbm misc.rkc misc.rk3 misc; do
             PATCH_SUBDIR="${EXT_DIR}/${subdir}/patches/v${KERNEL_SERIES}"
@@ -397,6 +417,7 @@ jobs:
         env:
           KERNEL_FULL:    ${{ needs.resolve-version.outputs.kernel_full }}
           ARM64_EXT_DIR:  ${{ env.ARM64_EXT_DIR }}
+          ARM64_KCO_DIR:  ${{ env.ARM64_KCO_DIR }}
         run: |
           chmod +x scripts/merge_kernel_config_arm64.sh
           scripts/merge_kernel_config_arm64.sh \
