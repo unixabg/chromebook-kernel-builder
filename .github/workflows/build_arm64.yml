@@ -509,8 +509,9 @@ jobs:
 
           mkdir -p output
           BUILD_DATE=$(date +%Y%m%d)
+          RUN_NUM="${{ github.run_number }}"
           DTB_PREFIX="${{ matrix.dtb_prefix }}"
-          TARBALL="output/${kver}-${DTB_PREFIX}-${CODENAME}-velvet-os-${BUILD_DATE}.tar.gz"
+          TARBALL="output/${kver}-${DTB_PREFIX}-${CODENAME}-velvet-os-${BUILD_DATE}-r${RUN_NUM}.tar.gz"
           tar czf "${TARBALL}" \
             -C "${STAGE}" \
             "boot/Image-${kver}" \
@@ -519,7 +520,7 @@ jobs:
             "boot/dtb-${kver}" \
             "boot/vmlinux.kpart-${kver}" \
             "lib/modules/${kver}"
-          cp "${KSRC}/.config" "output/config.${kver}-${DTB_PREFIX}-${CODENAME}-velvet-os-${BUILD_DATE}"
+          cp "${KSRC}/.config" "output/config.${kver}-${DTB_PREFIX}-${CODENAME}-velvet-os-${BUILD_DATE}-r${RUN_NUM}"
           rm -rf "${STAGE}"
           ls -lh output/
 

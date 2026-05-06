@@ -415,12 +415,13 @@ jobs:
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
           PLATFORM: ${{ matrix.platform }}
+          RUN_NUM: ${{ github.run_number }}
         run: |
           mkdir -p output
           find /var/tmp/kernel-build -maxdepth 1 -name "*.deb" \
             -exec cp {} output/ \;
           cp "/var/tmp/kernel-build/linux-${KERNEL_FULL}/.config" \
-            "output/config-${KERNEL_FULL}-${PLATFORM}"
+            "output/config-${KERNEL_FULL}-${PLATFORM}-r${RUN_NUM}"
           echo "Output files:"
           ls -lh output/
 
@@ -430,7 +431,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_full }}
+          name: kernel-${{ matrix.platform }}-${{ needs.resolve-version.outputs.kernel_full }}-r${{ github.run_number }}
           path: output/
           retention-days: 30
 
