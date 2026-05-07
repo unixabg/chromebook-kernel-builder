@@ -485,8 +485,8 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.resolve-version.outputs.kernel_full }}-chromebook-${{ steps.date.outputs.date }}
-          name: "Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }} (${{ steps.date.outputs.date }})"
+          tag_name: next-${{ needs.resolve-version.outputs.kernel_full }}-chromebook-${{ steps.date.outputs.date }}
+          name: "[next] Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }} (${{ steps.date.outputs.date }})"
           prerelease: true
           make_latest: false
           body: |
