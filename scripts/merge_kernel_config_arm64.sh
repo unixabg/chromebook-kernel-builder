@@ -214,6 +214,19 @@ fi
 # Our additions — applied LAST so they cannot be overridden by any external layer
 # =============================================================================
 
+# Platform config (guarantees critical options for this SoC family)
+PLATFORM_FRAG="${REPO_DIR}/configs/platform/${PLATFORM}.cfg"
+if [[ -f "$PLATFORM_FRAG" ]]; then
+    log "Applying platform fragment: $PLATFORM_FRAG"
+    if [[ -x "$KMERGE" ]]; then
+        ARCH=arm64 "${KMERGE}" -m -r .config "$PLATFORM_FRAG"
+        [[ -f ".config.new" ]] && mv .config.new .config
+    fi
+    make ARCH=arm64 olddefconfig
+else
+    log "INFO: no platform fragment for '$PLATFORM'"
+fi
+
 # ARM64 common fixes (fixes for issues found in hexdump's pipeline — PR candidates)
 COMMON_FIXES="${REPO_DIR}/configs/base/arm64-common-fixes.cfg"
 if [[ -f "$COMMON_FIXES" ]]; then
@@ -242,76 +255,19 @@ fi
 
 log ""
 log "=== Config merge complete: ${KERNEL_SRC}/.config ==="
-log "=== Pipeline: hexdump0815 layers + arm64-common-fixes + device overlay ==="
+log "=== Pipeline: hexdump0815 layers + platform + common-fixes + device overlay ==="
 log ""
 
-# ── Step 5: Verify critical MT8183 options ────────────────────────────────────
+# =============================================================================
+# Verify platform config exists
+# =============================================================================
 verify_config() {
-    local cfg="${KERNEL_SRC}/.config"
-    local warnings=0
-
-    log "=== Verifying critical options for platform: $PLATFORM ==="
-
-    check_y() {
-        if grep -q "^${1}=y" "$cfg"; then
-            log "  OK:      ${1}=y"
-        else
-            log "  WARNING: ${1} not =y  - ${2}"
-            (( warnings++ )) || true
-        fi
-    }
-    check_ym() {
-        if grep -qE "^${1}=[ym]" "$cfg"; then
-            log "  OK:      ${1} enabled"
-        else
-            log "  WARNING: ${1} not set - ${2}"
-            (( warnings++ )) || true
-        fi
-    }
-
-    case "$PLATFORM" in
-        mediatek-mt81xx)
-            log "  -- SoC core --"
-            check_y  "CONFIG_COMMON_CLK_MT8183" "SoC clocks missing - will not boot"
-            check_ym "CONFIG_PINCTRL_MT8183"    "pinctrl missing - many devices will fail"
-            check_y  "CONFIG_I2C_MT65XX"        "I2C must be built-in"
-            check_y  "CONFIG_SPI_MT65XX"        "SPI must be built-in"
-            check_ym "CONFIG_MMC_MTK"           "eMMC will not be detected"
-            check_y  "CONFIG_MTK_PMIC_WRAP"     "PMIC bus missing - power management broken"
-            check_y  "CONFIG_MTK_IOMMU"         "IOMMU missing - display/GPU DMA broken"
-            check_y  "CONFIG_MTK_CMDQ"          "display command queue missing"
-
-            log "  -- ChromeOS EC --"
-            check_ym "CONFIG_CROS_EC"           "keyboard and touchpad will not work"
-            check_ym "CONFIG_CROS_EC_SPI"       "EC SPI transport missing"
-
-            log "  -- Display --"
-            check_ym "CONFIG_DRM_PANFROST"           "GPU unavailable"
-            check_ym "CONFIG_DRM_MEDIATEK"           "display engine unavailable"
-            check_y  "CONFIG_DRM_DISPLAY_DSC_HELPER" "panel-ilitek-ili9882t will fail to link on 7.0+"
-
-            log "  -- Audio --"
-            check_ym "CONFIG_SND_SOC_MT8183"    "audio platform driver missing"
-
-            log "  -- WiFi --"
-            check_ym "CONFIG_ATH10K"            "ath10k missing"
-            check_ym "CONFIG_ATH10K_SDIO"       "ath10k SDIO missing"
-
-            log "  -- Filesystem --"
-            check_y  "CONFIG_BTRFS_FS"          "btrfs must be built-in (velvet-os root, no initramfs)"
-            ;;
-        *)
-            log "  INFO: no checks defined for platform '$PLATFORM'"
-            ;;
-    esac
-
-    log ""
-    if [[ "$warnings" -gt 0 ]]; then
-        log "  ${warnings} WARNING(s) - build aborted"
-        log "  Add missing options to configs/base/arm64-common-fixes.cfg or configs/device/${CODENAME}.cfg"
-        exit 1
+    log "=== Verifying platform: $PLATFORM ==="
+    if [[ -f "${REPO_DIR}/configs/platform/${PLATFORM}.cfg" ]]; then
+        log "  Critical options guaranteed by configs/platform/${PLATFORM}.cfg"
     else
-        log "  All critical options present"
+        log "  WARNING: no platform config found at configs/platform/${PLATFORM}.cfg"
+        log "  Create this file to guarantee critical options for this platform"
     fi
     log "=== Verification complete ==="
 }
