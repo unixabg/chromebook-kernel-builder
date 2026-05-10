@@ -7,7 +7,7 @@ on:
 
   # Run on push to main when commit message contains [build:platform] or [build:all]
   push:
-    branches: [ main ]
+    branches: [ main, next ]
 
   # Allow manual trigger with optional kernel version override
   workflow_dispatch:

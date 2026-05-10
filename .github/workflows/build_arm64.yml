@@ -7,7 +7,7 @@ on:
 
   # Run on push to main when commit message contains [build:arm64] or [build:all]
   push:
-    branches: [ main ]
+    branches: [ main, next ]
 
   # Allow manual trigger with optional overrides
   workflow_dispatch:
