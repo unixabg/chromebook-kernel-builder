@@ -136,12 +136,18 @@ Layer 8 — PLATFORM ADDITIONS
 
   make ARCH=arm64 olddefconfig run after all hexdump layers.
 
-Layer 9 — ARM64 COMMON FIXES (our additions, applied LAST)
+Layer 9 — LOCAL PLATFORM CONFIG (our additions, applied LAST)
+  configs/platform/<platform>.cfg
+  Guarantees critical options for this SoC family regardless of what
+  hexdump's stack provides. e.g. configs/platform/mediatek-mt81xx.cfg
+  Add a new file here when adding a new ARM64 platform.
+
+Layer 10 — ARM64 COMMON FIXES (our additions, applied LAST)
   configs/base/arm64-common-fixes.cfg
   Fixes for issues found in hexdump's pipeline. These are candidates
   to PR back to hexdump0815's kernel-config-options repo.
 
-Layer 10 — DEVICE (per board codename, optional)
+Layer 11 — DEVICE (per board codename, optional)
   configs/device/<codename>.cfg
   Only options absent from or wrong in hexdump's full stack.
   Keep this minimal.
@@ -169,13 +175,13 @@ chromebook-kernel-builder/
 │   ├── cmdline/
 │   │   └── chromebook-kukui.cmdline ← Kernel cmdline for MT8183 kpart
 │   ├── platform/
-│   │   ├── stoney-ridge.cfg         ← AMD Stoneyridge (TREEYA360/GRUNT)
-│   │   ├── amd-grunt.cfg            ← AMD GRUNT family
-│   │   ├── amd-ryzen-zork.cfg       ← AMD Ryzen (Zork family)
-│   │   ├── geminilake.cfg           ← Intel GeminiLake (PHASER360)
-│   │   ├── intel-braswell.cfg       ← Intel Braswell (STRAGO)
-│   │   └── intel-cometlake.cfg      ← Intel 10th Gen (HATCH)
-│   │   (ARM64 has no platform cfg - base comes from hexdump0815 external repo)
+│   │   ├── stoney-ridge.cfg             ← AMD Stoneyridge (TREEYA360/GRUNT)
+│   │   ├── amd-grunt.cfg                ← AMD GRUNT family
+│   │   ├── amd-ryzen-zork.cfg           ← AMD Ryzen (Zork family)
+│   │   ├── geminilake.cfg               ← Intel GeminiLake (PHASER360)
+│   │   ├── intel-braswell.cfg           ← Intel Braswell (STRAGO)
+│   │   ├── intel-cometlake.cfg          ← Intel 10th Gen (HATCH)
+│   │   └── mediatek-mt81xx.cfg          ← ARM64: MT81xx critical options (Layer 9)
 │   └── device/
 │       ├── aleena.cfg               ← Acer CB315-2H (DA7219 codec)
 │       ├── treeya.cfg               ← Lenovo 300e Gen2 AMD (RT5682 codec)
@@ -507,6 +513,9 @@ any of those files. Your only contributions are:
 
 - `configs/base/arm64-common-fixes.cfg` — for fixes that apply to all ARM64
   builds and should eventually be PRed back to hexdump0815
+- `configs/platform/<platform>.cfg` — guarantees critical options for an
+  SoC family regardless of what hexdump's stack provides. Create one when
+  adding a new platform (e.g. `configs/platform/rockchip-rk33xx.cfg`)
 - `configs/device/<codename>.cfg` — for options specific to one board that
   hexdump's full stack doesn't set correctly
 

@@ -19,8 +19,8 @@
 #   ./scripts/build_kernel_arm64.sh <platform> <codename> <kernel-full-version> <dtb-prefix>
 #
 # Example:
-#   ./scripts/build_kernel_arm64.sh mediatek-mt8183 esche 6.12.76 mt8183-kukui
-#   ./scripts/build_kernel_arm64.sh mediatek-mt8183 oak   6.12.76 mt8173-elm
+#   ./scripts/build_kernel_arm64.sh mediatek-mt81xx esche 6.12.76 mt8183-kukui
+#   ./scripts/build_kernel_arm64.sh mediatek-mt81xx oak   6.12.76 mt8173-elm
 # =============================================================================
 
 set -e
@@ -37,8 +37,8 @@ DTB_PREFIX="${4:-}"
 
 if [[ -z "$PLATFORM" || -z "$CODENAME" || -z "$KVER_FULL" || -z "$DTB_PREFIX" ]]; then
     echo "Usage: $0 <platform> <codename> <kernel-full-version> <dtb-prefix>"
-    echo "  e.g: $0 mediatek-mt8183 esche 6.12.76 mt8183-kukui"
-    echo "  e.g: $0 mediatek-mt8183 oak   6.12.76 mt8173-elm"
+    echo "  e.g: $0 mediatek-mt81xx esche 6.12.76 mt8183-kukui"
+    echo "  e.g: $0 mediatek-mt81xx oak   6.12.76 mt8173-elm"
     exit 1
 fi
 
@@ -119,10 +119,11 @@ cp -v .config               "${BOOT}/config-${kver}"
 cp -v arch/arm64/boot/Image "${BOOT}/Image-${kver}"
 cp -v System.map            "${BOOT}/System.map-${kver}"
 
-# DTBs - copy all DTBs matching the device prefix from hardware_map.conf
+# DTBs - derive vendor dir from platform name (mediatek-mt81xx -> mediatek)
+DTB_VENDOR=$(echo "$PLATFORM" | cut -d- -f1)
 mkdir -p "${BOOT}/dtb-${kver}"
-echo "==> Copying DTBs matching: arch/arm64/boot/dts/mediatek/${DTB_PREFIX}-*.dtb"
-find arch/arm64/boot/dts/mediatek -name "${DTB_PREFIX}-*.dtb" \
+echo "==> Copying DTBs matching: arch/arm64/boot/dts/${DTB_VENDOR}/${DTB_PREFIX}-*.dtb"
+find "arch/arm64/boot/dts/${DTB_VENDOR}" -name "${DTB_PREFIX}-*.dtb" \
     -exec cp -v {} "${BOOT}/dtb-${kver}/" \;
 DTB_COUNT=$(find "${BOOT}/dtb-${kver}" -name '*.dtb' | wc -l)
 echo "==> Staged ${DTB_COUNT} DTB(s)"
@@ -135,9 +136,20 @@ fi
 # ── ChromeOS FIT image (vmlinux.kpart) ───────────────────────────────────────
 echo "==> Creating vmlinux.kpart..."
 
-CMDLINE_FILE="${REPO_DIR}/configs/cmdline/chromebook-kukui.cmdline"
-if [[ ! -f "$CMDLINE_FILE" ]]; then
-    echo "ERROR: cmdline file not found: $CMDLINE_FILE"
+# Cmdline - look for codename, then platform, then generic fallback
+CMDLINE_FILE=""
+for f in \
+    "${REPO_DIR}/configs/cmdline/${CODENAME}.cmdline" \
+    "${REPO_DIR}/configs/cmdline/${PLATFORM}.cmdline" \
+    "${REPO_DIR}/configs/cmdline/chromebook-kukui.cmdline"; do
+    if [[ -f "$f" ]]; then
+        CMDLINE_FILE="$f"
+        echo "==> Using cmdline: $(basename "$f")"
+        break
+    fi
+done
+if [[ -z "$CMDLINE_FILE" ]]; then
+    echo "ERROR: no cmdline found for ${CODENAME} or ${PLATFORM}"
     exit 1
 fi
 
@@ -153,7 +165,7 @@ while IFS= read -r -d '' dtb; do
     DTB_ARGS+=(-b "$dtb")
 done < <(find "${BOOT}/dtb-${kver}" -name '*.dtb' -print0 | sort -z)
 
-# FIT image: lz4 Image + all kukui DTBs
+# FIT image: lz4 Image + all matching DTBs
 mkimage \
     -D "-I dts -O dtb -p 2048" \
     -f auto \
