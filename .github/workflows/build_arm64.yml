@@ -599,13 +599,29 @@ jobs:
         id: date
         run: echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
+      - name: Set release metadata
+        id: release_meta
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          if [[ "$BRANCH" == "main" ]]; then
+            echo "tag_prefix=" >> "$GITHUB_OUTPUT"
+            echo "name_prefix=" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_prefix=${BRANCH}-" >> "$GITHUB_OUTPUT"
+            echo "name_prefix=[${BRANCH}] " >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: next-${{ needs.resolve-version.outputs.kernel_full }}-chromebook-arm64-${{ steps.date.outputs.date }}
-          name: "[next] ARM64 Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }} (${{ steps.date.outputs.date }})"
-          prerelease: true
-          make_latest: false
+          tag_name: ${{ steps.release_meta.outputs.tag_prefix }}${{ needs.resolve-version.outputs.kernel_full }}-chromebook-arm64-${{ steps.date.outputs.date }}
+          name: "${{ steps.release_meta.outputs.name_prefix }}ARM64 Chromebook Kernels - linux-${{ needs.resolve-version.outputs.kernel_full }} (${{ steps.date.outputs.date }})"
+          prerelease: ${{ steps.release_meta.outputs.prerelease }}
+          make_latest: ${{ steps.release_meta.outputs.make_latest }}
           body: |
             ## ARM64 Chromebook Kernels
 
