@@ -148,7 +148,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "push" && -z "$BUILD_TAG" ]]; then
             echo "No [build:*] tag in commit message - skipping arm64 build"
             echo "skip=true"  >> "$GITHUB_OUTPUT"
-            echo "matrix={\"include\":[{\"codename\":\"skip\",\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\",\"dtb_prefix\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[{\"family\":\"skip\",\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\",\"dtb_prefixes\":\"skip\",\"codenames\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -177,13 +177,17 @@ jobs:
             echo "  To add a device, add a line with arm64 in field 5, e.g.:"
             echo "  esche|mediatek-mt81xx|default|none|arm64|HP Chromebook 11MK G9 EE"
             echo "skip=true"  >> "$GITHUB_OUTPUT"
-            echo "matrix={\"include\":[{\"codename\":\"skip\",\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\",\"dtb_prefix\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[{\"family\":\"skip\",\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\",\"dtb_prefixes\":\"skip\",\"codenames\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Build JSON matrix with optional filters
-          JSON='{"include":['
-          FIRST=true
+          # Build JSON matrix, grouped by platform (device family).
+          # Pass 1: apply filters per row; a family is selected if ANY of
+          #         its member rows matches (so codename filters build the
+          #         whole family kernel that device boots).
+          # Pass 2: union dtb prefixes and codenames per selected family;
+          #         kernel_series and patch_dir must agree across members.
+          declare -A SELECTED FAM_PREFIXES FAM_CODENAMES FAM_SERIES FAM_PATCHDIR
           for entry in "${ENTRIES[@]}"; do
             IFS='|' read -r codename platform series patch_dir dtb_prefix <<< "$entry"
 
@@ -205,10 +209,49 @@ jobs:
               continue
             fi
 
+            SELECTED[$platform]=1
+          done
+
+          for entry in "${ENTRIES[@]}"; do
+            IFS='|' read -r codename platform series patch_dir dtb_prefix <<< "$entry"
+            [[ -z "${SELECTED[$platform]:-}" ]] && continue
+
+            if [[ -n "${FAM_SERIES[$platform]:-}" ]]; then
+              if [[ "${FAM_SERIES[$platform]}" != "$series" ]]; then
+                echo "ERROR: kernel_series conflict in platform ${platform}:"
+                echo "  ${codename} wants ${series}, family has ${FAM_SERIES[$platform]}"
+                echo "  Align the rows or give ${codename} its own platform value."
+                exit 1
+              fi
+              if [[ "${FAM_PATCHDIR[$platform]}" != "$patch_dir" ]]; then
+                echo "ERROR: patch_dir conflict in platform ${platform}:"
+                echo "  ${codename} wants ${patch_dir}, family has ${FAM_PATCHDIR[$platform]}"
+                echo "  Align the rows or give ${codename} its own platform value."
+                exit 1
+              fi
+            else
+              FAM_SERIES[$platform]="$series"
+              FAM_PATCHDIR[$platform]="$patch_dir"
+            fi
+
+            # union of dtb prefixes (space-separated, deduped)
+            case " ${FAM_PREFIXES[$platform]:-} " in
+              *" ${dtb_prefix} "*) ;;
+              *) FAM_PREFIXES[$platform]="${FAM_PREFIXES[$platform]:+${FAM_PREFIXES[$platform]} }${dtb_prefix}" ;;
+            esac
+            FAM_CODENAMES[$platform]="${FAM_CODENAMES[$platform]:+${FAM_CODENAMES[$platform]},}${codename}"
+          done
+
+          JSON='{"include":['
+          FIRST=true
+          for platform in "${!SELECTED[@]}"; do
+            # family short name: mediatek-mt81xx -> mt81xx, rockchip-rk33xx -> rk33xx
+            family=$(echo "$platform" | cut -d- -f2)
+            echo "Family ${family}: codenames=${FAM_CODENAMES[$platform]} dtbs=${FAM_PREFIXES[$platform]}"
             [[ "$FIRST" == "true" ]] && FIRST=false || JSON+=','
-            JSON+="{\"codename\":\"${codename}\",\"platform\":\"${platform}\","
-            JSON+="\"kernel_series\":\"${series}\",\"patch_dir\":\"${patch_dir}\","
-            JSON+="\"dtb_prefix\":\"${dtb_prefix}\"}"
+            JSON+="{\"family\":\"${family}\",\"platform\":\"${platform}\","
+            JSON+="\"kernel_series\":\"${FAM_SERIES[$platform]}\",\"patch_dir\":\"${FAM_PATCHDIR[$platform]}\","
+            JSON+="\"dtb_prefixes\":\"${FAM_PREFIXES[$platform]}\",\"codenames\":\"${FAM_CODENAMES[$platform]}\"}"
           done
           JSON+=']}'
 
@@ -216,7 +259,7 @@ jobs:
           if [[ "$FIRST" == "true" ]]; then
             echo "No devices matched filters - skipping"
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "matrix={\"include\":[{\"codename\":\"skip\",\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\",\"dtb_prefix\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[{\"family\":\"skip\",\"platform\":\"skip\",\"kernel_series\":\"skip\",\"patch_dir\":\"skip\",\"dtb_prefixes\":\"skip\",\"codenames\":\"skip\"}]}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -225,10 +268,10 @@ jobs:
           echo "skip=false"   >> "$GITHUB_OUTPUT"
 
   # ============================================================
-  # Build - one job per device
+  # Build - one job per device family (platform)
   # ============================================================
   build:
-    name: Build ${{ matrix.codename }} (${{ matrix.platform }})
+    name: Build ${{ matrix.family }} (${{ matrix.platform }})
     needs: [ resolve-version, generate-matrix ]
     if: needs.generate-matrix.outputs.skip != 'true'
     runs-on: ubuntu-24.04-arm
@@ -395,23 +438,37 @@ jobs:
           # e.g. mt8183-kukui -> mt8183, mt8173-elm -> mt8173, rk3399-gru -> rk3399
           if [[ -n "$ARM64_EXT_DIR" && -n "${ARM64_EXT_PATCH_SUBDIR:-}" ]]; then
             EXT_PATCH_DIR="$ARM64_EXT_PATCH_SUBDIR"
-            SOC_PREFIX=$(echo "${{ matrix.dtb_prefix }}" | cut -d- -f1)
-            echo "==> SoC patch prefix: ${SOC_PREFIX}"
+            # SoC prefixes derived from every dtb prefix in the family
+            # e.g. "mt8173-elm mt8183-kukui" -> mt8173 mt8183
+            SOC_PREFIXES=""
+            for dp in ${{ matrix.dtb_prefixes }}; do
+              soc="${dp%%-*}"
+              case " ${SOC_PREFIXES} " in
+                *" ${soc} "*) ;;
+                *) SOC_PREFIXES="${SOC_PREFIXES:+${SOC_PREFIXES} }${soc}" ;;
+              esac
+            done
+            echo "==> SoC patch prefixes: ${SOC_PREFIXES}"
             if [[ -d "$EXT_PATCH_DIR" ]]; then
               shopt -s nullglob
               # SoC-specific patches (e.g. mt8183*.patch, mt8173*.patch, rk3399*.patch)
-              soc_patches=("${EXT_PATCH_DIR}"/${SOC_PREFIX}*.patch)
-              [[ ${#soc_patches[@]} -gt 0 ]] && \
-                echo "==> ${#soc_patches[@]} external ${SOC_PREFIX} patch(es)..." && \
-                for p in "${soc_patches[@]}"; do apply_patch "$p"; done
-              # Family-wide patches (e.g. mt81xx*.patch) - only if different from SOC_PREFIX
-              FAMILY_PREFIX=$(echo "${{ matrix.platform }}" | sed 's/[^0-9]*$/xx/' | cut -d- -f2)
-              if [[ "$FAMILY_PREFIX" != "$SOC_PREFIX" ]]; then
-                family_patches=("${EXT_PATCH_DIR}"/${FAMILY_PREFIX}*.patch)
-                [[ ${#family_patches[@]} -gt 0 ]] && \
-                  echo "==> ${#family_patches[@]} external ${FAMILY_PREFIX} patch(es)..." && \
-                  for p in "${family_patches[@]}"; do apply_patch "$p"; done
-              fi
+              for SOC_PREFIX in ${SOC_PREFIXES}; do
+                soc_patches=("${EXT_PATCH_DIR}"/${SOC_PREFIX}*.patch)
+                [[ ${#soc_patches[@]} -gt 0 ]] && \
+                  echo "==> ${#soc_patches[@]} external ${SOC_PREFIX} patch(es)..." && \
+                  for p in "${soc_patches[@]}"; do apply_patch "$p"; done
+              done
+              # Family-wide patches (e.g. mt81xx*.patch) - only if not already covered
+              FAMILY_PREFIX="${{ matrix.family }}"
+              case " ${SOC_PREFIXES} " in
+                *" ${FAMILY_PREFIX} "*) ;;
+                *)
+                  family_patches=("${EXT_PATCH_DIR}"/${FAMILY_PREFIX}*.patch)
+                  [[ ${#family_patches[@]} -gt 0 ]] && \
+                    echo "==> ${#family_patches[@]} external ${FAMILY_PREFIX} patch(es)..." && \
+                    for p in "${family_patches[@]}"; do apply_patch "$p"; done
+                  ;;
+              esac
             else
               echo "WARNING: external patch dir not found: $EXT_PATCH_DIR"
             fi
@@ -446,7 +503,7 @@ jobs:
           scripts/merge_kernel_config_arm64.sh \
             --kernel-src "/var/tmp/kernel-build/linux-${KERNEL_FULL}" \
             --platform   "${{ matrix.platform }}" \
-            --codename   "${{ matrix.codename }}"
+            --codename   "${{ matrix.family }}"
 
       - name: Build kernel
         env:
@@ -454,7 +511,7 @@ jobs:
         run: |
           export CCACHE_DIR=~/.ccache
           ccache -s
-          LOCAL_VERSION="-chromebook-${{ matrix.dtb_prefix }}-velvet-os"
+          LOCAL_VERSION="-chromebook-${{ matrix.family }}-velvet-os"
           cd "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           time make ARCH=arm64 \
             CC="ccache gcc" \
@@ -468,18 +525,19 @@ jobs:
       # --------------------------------------------------------
       # Package
       # Cmdline lookup order (first match wins):
-      #   configs/cmdline/<codename>.cmdline
       #   configs/cmdline/<platform>.cmdline
-      #   configs/cmdline/chromebook-kukui.cmdline
-      # Contributors: add configs/cmdline/<codename>.cmdline if
-      # your device needs different kernel parameters.
+      #   configs/cmdline/chromebook-kukui.cmdline   (fallback)
+      # One cmdline per family: all velvet-os devices share the
+      # same partition layout. A device needing different kernel
+      # parameters needs its own platform value in hardware_map.conf.
       # --------------------------------------------------------
       - name: Package tar.gz
         env:
           KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
         run: |
           KSRC="/var/tmp/kernel-build/linux-${KERNEL_FULL}"
-          CODENAME="${{ matrix.codename }}"
+          FAMILY="${{ matrix.family }}"
+          CODENAMES="${{ matrix.codenames }}"
           PLATFORM="${{ matrix.platform }}"
           kver=$(make -C "$KSRC" ARCH=arm64 LOCALVERSION="${LOCAL_VERSION}" \
                  --no-print-directory kernelrelease)
@@ -497,16 +555,17 @@ jobs:
           cp "${KSRC}/System.map"            "${BOOT}/System.map-${kver}"
 
           mkdir -p "${BOOT}/dtb-${kver}"
-          DTB_PREFIX="${{ matrix.dtb_prefix }}"
           # Derive DTS vendor subdir from platform: mediatek-mt81xx -> mediatek, rockchip-rk33xx -> rockchip
           DTS_VENDOR=$(echo "${{ matrix.platform }}" | cut -d- -f1)
           DTS_DIR="${KSRC}/arch/arm64/boot/dts/${DTS_VENDOR}"
-          echo "Copying DTBs matching: ${DTS_DIR}/${DTB_PREFIX}-*.dtb"
-          find "${DTS_DIR}" -name "${DTB_PREFIX}-*.dtb" \
-            -exec cp -v {} "${BOOT}/dtb-${kver}/" \;
+          for DTB_PREFIX in ${{ matrix.dtb_prefixes }}; do
+            echo "Copying DTBs matching: ${DTS_DIR}/${DTB_PREFIX}-*.dtb"
+            find "${DTS_DIR}" -name "${DTB_PREFIX}-*.dtb" \
+              -exec cp -v {} "${BOOT}/dtb-${kver}/" \;
+          done
           DTB_COUNT=$(find "${BOOT}/dtb-${kver}" -name '*.dtb' | wc -l)
-          echo "Staged ${DTB_COUNT} DTB(s)"
-          [[ "$DTB_COUNT" -eq 0 ]] && { echo "ERROR: no DTBs matching ${DTB_PREFIX}-*.dtb"; exit 1; }
+          echo "Staged ${DTB_COUNT} DTB(s) for family ${FAMILY} (${CODENAMES})"
+          [[ "$DTB_COUNT" -eq 0 ]] && { echo "ERROR: no DTBs matching ${{ matrix.dtb_prefixes }}"; exit 1; }
 
           lz4 -f "${BOOT}/Image-${kver}" "${STAGE}/Image.lz4"
           dd if=/dev/zero of="${STAGE}/bootloader.bin" bs=512 count=1 2>/dev/null
@@ -525,7 +584,6 @@ jobs:
           # Cmdline lookup
           CMDLINE_FILE=""
           for candidate in \
-              "configs/cmdline/${CODENAME}.cmdline" \
               "configs/cmdline/${PLATFORM}.cmdline" \
               "configs/cmdline/chromebook-kukui.cmdline"; do
             if [[ -f "$candidate" ]]; then
@@ -535,7 +593,7 @@ jobs:
             fi
           done
           [[ -z "$CMDLINE_FILE" ]] && \
-            { echo "ERROR: no cmdline found for ${CODENAME} or ${PLATFORM}"; exit 1; }
+            { echo "ERROR: no cmdline found for ${PLATFORM}"; exit 1; }
 
           vbutil_kernel \
             --pack "${BOOT}/vmlinux.kpart-${kver}" \
@@ -554,8 +612,7 @@ jobs:
           mkdir -p output
           BUILD_DATE=$(date +%Y%m%d)
           RUN_NUM="${{ github.run_number }}"
-          DTB_PREFIX="${{ matrix.dtb_prefix }}"
-          TARBALL="output/${kver}-${DTB_PREFIX}-${CODENAME}-velvet-os-${BUILD_DATE}-r${RUN_NUM}.tar.gz"
+          TARBALL="output/${kver}-${FAMILY}-${BUILD_DATE}-r${RUN_NUM}.tar.gz"
           tar czf "${TARBALL}" \
             -C "${STAGE}" \
             "boot/Image-${kver}" \
@@ -564,14 +621,14 @@ jobs:
             "boot/dtb-${kver}" \
             "boot/vmlinux.kpart-${kver}" \
             "lib/modules/${kver}"
-          cp "${KSRC}/.config" "output/config.${kver}-${DTB_PREFIX}-${CODENAME}-velvet-os-${BUILD_DATE}-r${RUN_NUM}"
+          cp "${KSRC}/.config" "output/config.${kver}-${FAMILY}-${BUILD_DATE}-r${RUN_NUM}"
           rm -rf "${STAGE}"
           ls -lh output/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ matrix.codename }}-${{ needs.resolve-version.outputs.kernel_full }}
+          name: kernel-${{ matrix.family }}-${{ needs.resolve-version.outputs.kernel_full }}
           path: output/
           retention-days: 30
 
@@ -657,21 +714,21 @@ jobs:
 
             ### Installation (velvet-os + velvet-tools)
 
-            Tarball naming: `<kver>-<dtb-prefix>-<codename>-velvet-os-<date>-r<N>.tar.gz`
-            Kernel version string: `<kver>-chromebook-<dtb-prefix>-velvet-os`
+            Tarball naming: `<kver>-<family>-<date>-r<N>.tar.gz` - one tarball per device family; the FIT image carries all family DTBs and the bootloader selects the right one automatically
+            Kernel version string: `<x.y.z>-chromebook-<family>-velvet-os`
 
             ```bash
-            sudo tar xzf <kver>-<dtb-prefix>-<codename>-velvet-os-<date>-r<N>.tar.gz -C /
+            sudo tar xzf <kver>-<family>-<date>-r<N>.tar.gz -C /
             sudo vtlist
             # note the kernel version listed, then:
-            sudo vtbuild <kver>-chromebook-<dtb-prefix>-velvet-os
+            sudo vtbuild <x.y.z>-chromebook-<family>-velvet-os
             sudo reboot
             ```
 
-            Example for esche (MT8183):
+            Example for the mt81xx family (esche, oak):
             ```bash
-            sudo tar xzf 7.0.3-mt8183-kukui-esche-velvet-os-20260506-r47.tar.gz -C /
-            sudo vtbuild 7.0.3-chromebook-mt8183-kukui-velvet-os
+            sudo tar xzf 7.0.3-chromebook-mt81xx-velvet-os-mt81xx-20260506-r47.tar.gz -C /
+            sudo vtbuild 7.0.3-chromebook-mt81xx-velvet-os
             sudo reboot
             ```
 
@@ -683,7 +740,7 @@ jobs:
             For non-velvet-os systems or manual installs:
 
             ```bash
-            sudo tar xzf <kver>-<dtb-prefix>-<codename>-velvet-os-<date>-r<N>.tar.gz -C /
+            sudo tar xzf <kver>-<family>-<date>-r<N>.tar.gz -C /
             KERN=$(cgpt find -t kernel /dev/mmcblk1 | head -1)
             sudo dd if=/boot/vmlinux.kpart-<kver> of="${KERN}" bs=4M
             sudo cgpt add -i "${KERN##*p}" -P 15 -T 1 -S 1 /dev/mmcblk1
