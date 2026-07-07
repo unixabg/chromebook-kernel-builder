@@ -511,7 +511,7 @@ jobs:
         run: |
           export CCACHE_DIR=~/.ccache
           ccache -s
-          LOCAL_VERSION="-chromebook-${{ matrix.family }}-velvet-os"
+          LOCAL_VERSION="-velvet-${{ matrix.family }}"
           cd "/var/tmp/kernel-build/linux-${KERNEL_FULL}"
           time make ARCH=arm64 \
             CC="ccache gcc" \
@@ -612,7 +612,8 @@ jobs:
           mkdir -p output
           BUILD_DATE=$(date +%Y%m%d)
           RUN_NUM="${{ github.run_number }}"
-          TARBALL="output/${kver}-${FAMILY}-${BUILD_DATE}-r${RUN_NUM}.tar.gz"
+          # kver already encodes the family via LOCALVERSION - no duplication
+          TARBALL="output/linux-${kver}-${BUILD_DATE}-r${RUN_NUM}.tar.gz"
           tar czf "${TARBALL}" \
             -C "${STAGE}" \
             "boot/Image-${kver}" \
@@ -621,7 +622,7 @@ jobs:
             "boot/dtb-${kver}" \
             "boot/vmlinux.kpart-${kver}" \
             "lib/modules/${kver}"
-          cp "${KSRC}/.config" "output/config.${kver}-${FAMILY}-${BUILD_DATE}-r${RUN_NUM}"
+          cp "${KSRC}/.config" "output/config-${kver}-${BUILD_DATE}-r${RUN_NUM}"
           rm -rf "${STAGE}"
           ls -lh output/
 
@@ -714,21 +715,21 @@ jobs:
 
             ### Installation (velvet-os + velvet-tools)
 
-            Tarball naming: `<kver>-<family>-<date>-r<N>.tar.gz` - one tarball per device family; the FIT image carries all family DTBs and the bootloader selects the right one automatically
-            Kernel version string: `<x.y.z>-chromebook-<family>-velvet-os`
+            Tarball naming: `linux-<kver>-<date>-r<N>.tar.gz` where `<kver>` is `<x.y.z>-velvet-<family>` - one tarball per device family; the FIT image carries all family DTBs and the bootloader selects the right one automatically
+            Kernel version string: `<x.y.z>-velvet-<family>`
 
             ```bash
-            sudo tar xzf <kver>-<family>-<date>-r<N>.tar.gz -C /
+            sudo tar xzf linux-<kver>-<date>-r<N>.tar.gz -C /
             sudo vtlist
             # note the kernel version listed, then:
-            sudo vtbuild <x.y.z>-chromebook-<family>-velvet-os
+            sudo vtbuild <x.y.z>-velvet-<family>
             sudo reboot
             ```
 
             Example for the mt81xx family (esche, oak):
             ```bash
-            sudo tar xzf 7.0.3-chromebook-mt81xx-velvet-os-mt81xx-20260506-r47.tar.gz -C /
-            sudo vtbuild 7.0.3-chromebook-mt81xx-velvet-os
+            sudo tar xzf linux-7.0.3-velvet-mt81xx-20260506-r47.tar.gz -C /
+            sudo vtbuild 7.0.3-velvet-mt81xx
             sudo reboot
             ```
 
@@ -740,7 +741,7 @@ jobs:
             For non-velvet-os systems or manual installs:
 
             ```bash
-            sudo tar xzf <kver>-<family>-<date>-r<N>.tar.gz -C /
+            sudo tar xzf linux-<kver>-<date>-r<N>.tar.gz -C /
             KERN=$(cgpt find -t kernel /dev/mmcblk1 | head -1)
             sudo dd if=/boot/vmlinux.kpart-<kver> of="${KERN}" bs=4M
             sudo cgpt add -i "${KERN##*p}" -P 15 -T 1 -S 1 /dev/mmcblk1
