@@ -348,9 +348,23 @@ jobs:
             exit 0
           fi
 
+          # Branch comes from ARM64_EXTERNAL_REPO_BRANCH in kernel_versions.conf
+          # (e.g. lts-v6.18). Fail rather than fall back to the default branch,
+          # which may track a newer kernel than DEFAULT_SERIES_ARM64.
+          EXT_BRANCH=$(grep "^ARM64_EXTERNAL_REPO_BRANCH=" configs/kernel_versions.conf \
+                       | cut -d= -f2-)
+          if [[ -z "$EXT_BRANCH" ]]; then
+            echo "ERROR: ARM64_EXTERNAL_REPO_BRANCH not set in configs/kernel_versions.conf"
+            exit 1
+          fi
+          if ! git ls-remote --exit-code --heads "$EXT_URL" "$EXT_BRANCH" >/dev/null 2>&1; then
+            echo "ERROR: branch '$EXT_BRANCH' not found in $EXT_URL"
+            exit 1
+          fi
+
           EXT_DIR="/var/tmp/arm64-external-src"
-          echo "Cloning $EXT_URL for platform $PLATFORM ..."
-          git clone --depth=1 "$EXT_URL" "$EXT_DIR"
+          echo "Cloning $EXT_URL (branch $EXT_BRANCH) for platform $PLATFORM ..."
+          git clone --depth=1 --branch "$EXT_BRANCH" "$EXT_URL" "$EXT_DIR"
           echo "ARM64_EXT_DIR=${EXT_DIR}" >> "$GITHUB_ENV"
 
       # --------------------------------------------------------
