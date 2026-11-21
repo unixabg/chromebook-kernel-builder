@@ -140,11 +140,16 @@ if [[ -n "$KCO_DIR" ]]; then
         FRAGMENTS+=("${MISC_OPTIONS_DIR}/additional-options-special.cfg") && \
         log "  + additional-options-special.cfg (external)"
 
-    # Apply all fragments in one merge_config.sh call (hexdump's approach)
+    # Apply all fragments in one merge_config.sh call (hexdump's approach).
+    # Base is arch/arm64/configs/defconfig itself, as in readme.<flavor> -
+    # NOT the expanded .config from "make defconfig": merging onto the
+    # expanded file pins every default it contains, so options the
+    # fragments should change via dependencies keep their defconfig value
+    # (about 100 options differed from hexdump's cbm config that way).
     if [[ ${#FRAGMENTS[@]} -gt 0 ]]; then
         if [[ -x "$KMERGE" ]]; then
             log "Merging ${#FRAGMENTS[@]} fragments..."
-            ARCH=arm64 "${KMERGE}" -m -r .config "${FRAGMENTS[@]}"
+            ARCH=arm64 "${KMERGE}" -m -r arch/arm64/configs/defconfig "${FRAGMENTS[@]}"
             [[ -f ".config.new" ]] && mv .config.new .config
         else
             log "ERROR: merge_config.sh not found at $KMERGE"
