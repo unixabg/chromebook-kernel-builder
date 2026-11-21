@@ -63,9 +63,14 @@ KMERGE="${KERNEL_SRC}/scripts/kconfig/merge_config.sh"
 KCO_DIR="${ARM64_KCO_DIR:-}"
 EXT_DIR="${ARM64_EXT_DIR:-}"
 
-# Detect the misc subdir in the external repo (misc.cbm, misc.rkc, etc.)
+# Misc subdir in the external repo: misc.<flavor> from configs/arm64_flavors.conf
+# (exported by the workflow as ARM64_FLAVOR). Without it, fall back to the
+# old search order for local builds.
 MISC_OPTIONS_DIR=""
-if [[ -n "$EXT_DIR" ]]; then
+if [[ -n "$EXT_DIR" && -n "${ARM64_FLAVOR:-}" ]]; then
+    MISC_OPTIONS_DIR="${EXT_DIR}/misc.${ARM64_FLAVOR}/options"
+    [[ -d "$MISC_OPTIONS_DIR" ]] || { log "ERROR: $MISC_OPTIONS_DIR not found"; exit 1; }
+elif [[ -n "$EXT_DIR" ]]; then
     for subdir in misc.cbm misc.rkc misc.rk3 misc; do
         if [[ -d "${EXT_DIR}/${subdir}/options" ]]; then
             MISC_OPTIONS_DIR="${EXT_DIR}/${subdir}/options"
@@ -74,9 +79,10 @@ if [[ -n "$EXT_DIR" ]]; then
     done
 fi
 
-# Derive short platform name for kernel-config-options file lookup
-# mediatek-mt81xx -> mediatek,  rockchip-rk33xx -> rockchip
-PLATFORM_SHORT=$(echo "$PLATFORM" | cut -d- -f1)
+# kernel-config-options platform fragment: ARM64_KCO_PLATFORM from
+# configs/arm64_flavors.conf ("none" = no fragment). Without it, derive
+# from the platform name for local builds: mediatek-mt81xx -> mediatek
+PLATFORM_SHORT="${ARM64_KCO_PLATFORM:-$(echo "$PLATFORM" | cut -d- -f1)}"
 
 # =============================================================================
 # Primary pipeline: replicate hexdump0815's exact layer order
@@ -148,6 +154,9 @@ if [[ -n "$KCO_DIR" ]]; then
 
     log "Running olddefconfig..."
     make ARCH=arm64 olddefconfig
+    # Snapshot of hexdump0815's layers only, before our platform/fixes/device
+    # layers - the workflow compares this with hexdump's shipped config.
+    cp .config .config.hexdump-stage
 
 # =============================================================================
 # Fallback pipeline: no kernel-config-options repo available

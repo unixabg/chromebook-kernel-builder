@@ -245,7 +245,7 @@ jobs:
           JSON='{"include":['
           FIRST=true
           for platform in "${!SELECTED[@]}"; do
-            # family short name: mediatek-mt81xx -> mt81xx, rockchip-rk33xx -> rk33xx
+            # family short name: mediatek-mt81xx -> mt81xx, rockchip-gru -> gru
             family=$(echo "$platform" | cut -d- -f2)
             echo "Family ${family}: codenames=${FAM_CODENAMES[$platform]} dtbs=${FAM_PREFIXES[$platform]}"
             [[ "$FIRST" == "true" ]] && FIRST=false || JSON+=','
@@ -328,24 +328,35 @@ jobs:
       # --------------------------------------------------------
       # Clone external patch/config source
       # URL is looked up from kernel_versions.conf using the
-      # platform name: ARM64_EXTERNAL_REPO_URL_<PLATFORM_KEY>
-      # e.g. mediatek-mt81xx -> ARM64_EXTERNAL_REPO_URL_MEDIATEK
-      #      rockchip-rk3399 -> ARM64_EXTERNAL_REPO_URL_ROCKCHIP
+      # flavor map: configs/arm64_flavors.conf gives REPO_KEY, used as
+      # ARM64_EXTERNAL_REPO_URL_<REPO_KEY>
+      # e.g. mediatek-mt81xx -> cbm, MEDIATEK
+      #      rockchip-gru    -> cbg, GENERIC
       # --------------------------------------------------------
       - name: Clone external patch/config source
         env:
           KERNEL_SERIES: ${{ needs.resolve-version.outputs.kernel_series }}
           PLATFORM:      ${{ matrix.platform }}
         run: |
-          # Derive key from platform name: mediatek-mt81xx -> MEDIATEK
-          PLATFORM_KEY=$(echo "$PLATFORM" | cut -d- -f1 | tr '[:lower:]' '[:upper:]')
+          # Look the platform up in configs/arm64_flavors.conf
+          FLAVOR_ROW=$(grep -v '^\s*#' configs/arm64_flavors.conf | grep "^${PLATFORM}|" || true)
+          if [[ -z "$FLAVOR_ROW" ]]; then
+            echo "ERROR: platform '$PLATFORM' not found in configs/arm64_flavors.conf"
+            exit 1
+          fi
+          IFS='|' read -r _ FLAVOR PLATFORM_KEY KCO_PLATFORM TREE_PATCHES <<< "$FLAVOR_ROW"
+          echo "Platform $PLATFORM -> flavor $FLAVOR, tree $PLATFORM_KEY, kco fragment $KCO_PLATFORM, tree patches $TREE_PATCHES"
+          {
+            echo "ARM64_FLAVOR=${FLAVOR}"
+            echo "ARM64_KCO_PLATFORM=${KCO_PLATFORM}"
+            echo "ARM64_TREE_PATCHES=${TREE_PATCHES}"
+          } >> "$GITHUB_ENV"
           EXT_URL=$(grep "^ARM64_EXTERNAL_REPO_URL_${PLATFORM_KEY}=" configs/kernel_versions.conf \
                     | cut -d= -f2-)
 
           if [[ -z "$EXT_URL" ]]; then
-            echo "ARM64_EXTERNAL_REPO_URL_${PLATFORM_KEY} not set - skipping external clone"
-            echo "ARM64_EXT_DIR=" >> "$GITHUB_ENV"
-            exit 0
+            echo "ERROR: ARM64_EXTERNAL_REPO_URL_${PLATFORM_KEY} not set in configs/kernel_versions.conf"
+            exit 1
           fi
 
           # Branch comes from ARM64_EXTERNAL_REPO_BRANCH in kernel_versions.conf
@@ -365,6 +376,10 @@ jobs:
           EXT_DIR="/var/tmp/arm64-external-src"
           echo "Cloning $EXT_URL (branch $EXT_BRANCH) for platform $PLATFORM ..."
           git clone --depth=1 --branch "$EXT_BRANCH" "$EXT_URL" "$EXT_DIR"
+          if [[ ! -d "${EXT_DIR}/misc.${FLAVOR}" ]]; then
+            echo "ERROR: misc.${FLAVOR} not found in $EXT_URL (branch $EXT_BRANCH)"
+            exit 1
+          fi
           echo "ARM64_EXT_DIR=${EXT_DIR}" >> "$GITHUB_ENV"
 
       # --------------------------------------------------------
@@ -395,8 +410,11 @@ jobs:
           # external patches). Falls back to the nearest lower version dir if
           # the exact series has no patches upstream yet (e.g. v6.19 -> v6.18).
           FOUND=""
-          if [[ -n "${ARM64_EXT_DIR:-}" ]]; then
-            for subdir in misc.cbm misc.rkc misc.rk3 misc; do
+          if [[ "${ARM64_TREE_PATCHES:-}" != "soc-glob" ]]; then
+            echo "Flavor ${ARM64_FLAVOR:-?} uses tree patches '${ARM64_TREE_PATCHES:-none}' - no versioned patch dir needed"
+            FOUND="n/a"
+          elif [[ -n "${ARM64_EXT_DIR:-}" ]]; then
+            for subdir in "misc.${ARM64_FLAVOR}"; do
               BASE="${ARM64_EXT_DIR}/${subdir}/patches"
               [[ -d "$BASE" ]] || continue
               PATCH_SUBDIR="${BASE}/v${KERNEL_SERIES}"
@@ -448,7 +466,22 @@ jobs:
               || echo "  WARNING: $(basename "$1") did not apply cleanly"
           }
 
-          # 1. External patches - derive SoC prefix from dtb_prefix
+          # 1a. Listed tree patches (generic-tree flavors such as cbq),
+          #     from misc.<flavor>/patches/ as named in configs/arm64_flavors.conf
+          if [[ -n "${ARM64_TREE_PATCHES:-}" && "$ARM64_TREE_PATCHES" != "soc-glob" \
+                && "$ARM64_TREE_PATCHES" != "none" ]]; then
+            IFS=',' read -ra listed <<< "$ARM64_TREE_PATCHES"
+            echo "==> ${#listed[@]} listed patch(es) from misc.${ARM64_FLAVOR}/patches..."
+            for name in "${listed[@]}"; do
+              p="${ARM64_EXT_DIR}/misc.${ARM64_FLAVOR}/patches/${name}"
+              [[ -f "$p" ]] || { echo "ERROR: listed patch not found: $p"; exit 1; }
+              apply_patch "$p"
+            done
+          elif [[ "${ARM64_TREE_PATCHES:-}" == "none" ]]; then
+            echo "Flavor ${ARM64_FLAVOR} applies no patches from the tree"
+          fi
+
+          # 1b. External patches (soc-glob flavors) - derive SoC prefix from dtb_prefix
           # e.g. mt8183-kukui -> mt8183, mt8173-elm -> mt8173, rk3399-gru -> rk3399
           if [[ -n "$ARM64_EXT_DIR" && -n "${ARM64_EXT_PATCH_SUBDIR:-}" ]]; then
             EXT_PATCH_DIR="$ARM64_EXT_PATCH_SUBDIR"
@@ -486,7 +519,7 @@ jobs:
             else
               echo "WARNING: external patch dir not found: $EXT_PATCH_DIR"
             fi
-          else
+          elif [[ "${ARM64_TREE_PATCHES:-}" == "soc-glob" ]]; then
             echo "No external patch source configured for ${{ matrix.platform }}"
           fi
 
@@ -518,6 +551,52 @@ jobs:
             --kernel-src "/var/tmp/kernel-build/linux-${KERNEL_FULL}" \
             --platform   "${{ matrix.platform }}" \
             --codename   "${{ matrix.family }}"
+
+      # --------------------------------------------------------
+      # Fidelity report: compare the config after hexdump0815's layers
+      # (.config.hexdump-stage, saved by merge_kernel_config_arm64.sh before
+      # our platform/fixes/device layers) with the config hexdump shipped
+      # for this flavor (config.<flavor>-<series>.* in the tree).
+      # Warning only - the main safety net for boards we cannot boot-test.
+      # Toolchain options (e.g. CONFIG_RELR) are ignored.
+      # --------------------------------------------------------
+      - name: Compare config with hexdump0815
+        env:
+          KERNEL_FULL:   ${{ needs.resolve-version.outputs.kernel_full }}
+          KERNEL_SERIES: ${{ needs.resolve-version.outputs.kernel_series }}
+        run: |
+          REF=$(ls -1 "${ARM64_EXT_DIR}"/config."${ARM64_FLAVOR}"-"${KERNEL_SERIES}".* 2>/dev/null | sort -V | tail -1 || true)
+          if [[ -z "$REF" ]]; then
+            echo "::warning::no config.${ARM64_FLAVOR}-${KERNEL_SERIES}.* in hexdump tree - skipping comparison"
+            exit 0
+          fi
+          echo "Reference: $(basename "$REF")"
+          STAGE="/var/tmp/kernel-build/linux-${KERNEL_FULL}/.config.hexdump-stage"
+          if [[ ! -f "$STAGE" ]]; then
+            echo "::warning::$STAGE not found - skipping comparison"
+            exit 0
+          fi
+          python3 - "$STAGE" "$REF" "${ARM64_FLAVOR}" <<'PY'
+          import re, sys
+          def load(p):
+              d = {}
+              for l in open(p):
+                  m = re.match(r'^(CONFIG_\w+)=(.*)$', l)
+                  if m: d[m[1]] = m[2]; continue
+                  m = re.match(r'^# (CONFIG_\w+) is not set$', l)
+                  if m: d[m[1]] = 'n'
+              return d
+          noise = re.compile(r'^CONFIG_(CC_|GCC_|LD_|AS_|CLANG|RUSTC|PAHOLE|TOOLCHAIN|LLD|RELR|BUILD_SALT|LOCALVERSION|ARCH_SUPPORTS_|TOOLS_SUPPORT|HAVE_.*_COMPILER)')
+          ours, ref = load(sys.argv[1]), load(sys.argv[2])
+          diff = [(k, ours.get(k, '-'), ref.get(k, '-')) for k in sorted(set(ours) | set(ref))
+                  if ours.get(k, 'n') != ref.get(k, 'n') and not noise.match(k)]
+          for k, a, b in diff:
+              print(f"  {k}: ours={a} hexdump={b}")
+          if diff:
+              print(f"::warning::{len(diff)} config difference(s) vs hexdump0815 {sys.argv[3]}")
+          else:
+              print("Config matches hexdump0815 (ignoring toolchain options)")
+          PY
 
       - name: Build kernel
         env:
@@ -569,7 +648,7 @@ jobs:
           cp "${KSRC}/System.map"            "${BOOT}/System.map-${kver}"
 
           mkdir -p "${BOOT}/dtb-${kver}"
-          # Derive DTS vendor subdir from platform: mediatek-mt81xx -> mediatek, rockchip-rk33xx -> rockchip
+          # Derive DTS vendor subdir from platform: mediatek-mt81xx -> mediatek, qcom-trogdor -> qcom
           DTS_VENDOR=$(echo "${{ matrix.platform }}" | cut -d- -f1)
           DTS_DIR="${KSRC}/arch/arm64/boot/dts/${DTS_VENDOR}"
           for DTB_PREFIX in ${{ matrix.dtb_prefixes }}; do

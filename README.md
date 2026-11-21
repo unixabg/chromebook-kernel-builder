@@ -320,8 +320,10 @@ two depthcharge kernel partitions.
 | mt81xx | corsola | corsola boards (untested) | MT8186 | mt8186-corsola-* |
 | mt81xx | asurada | hayato, spherion (untested) | MT8192 | mt8192-asurada-* |
 | mt81xx | cherry | dojo, tomato (untested) | MT8195 | mt8195-cherry-* |
-| rk33xx | kevin | Samsung Chromebook Plus | RK3399 | rk3399-gru-* |
-| rk33xx | bob | Asus Chromebook Flip C101PA | RK3399 | rk3399-gru-* |
+| gru | kevin | Samsung Chromebook Plus (untested) | RK3399 | rk3399-gru-* |
+| gru | bob | Asus Chromebook Flip C101PA (untested) | RK3399 | rk3399-gru-* |
+| gru | scarlet | RK3399 scarlet tablets (untested) | RK3399 | rk3399-gru-* |
+| trogdor | trogdor | trogdor boards: lazor, pompom, coachz, ... (untested) | SC7180 | sc7180-trogdor-* |
 
 Because DTBs are collected by glob, the family tarball implicitly covers
 every board those globs match — all kukui variants (Acer 311, Lenovo
