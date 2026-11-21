@@ -313,16 +313,20 @@ two depthcharge kernel partitions.
 
 ### Supported devices
 
-| Family | Codename | Device | SoC | DTB glob |
+| Family | Codename | Device | SoC | DTBs |
 |---|---|---|---|---|
 | mt81xx | esche | HP Chromebook 11MK G9 EE | MT8183 | mt8183-kukui-* |
-| mt81xx | oak | Samsung Chromebook Plus | MT8173 | mt8173-elm-* |
+| mt81xx | oak | elm (Acer Chromebook R13) and hana boards | MT8173 | mt8173-elm, mt8173-elm-* |
+| mt81xx | corsola | corsola boards (untested) | MT8186 | mt8186-corsola-* |
+| mt81xx | asurada | hayato, spherion (untested) | MT8192 | mt8192-asurada-* |
+| mt81xx | cherry | dojo, tomato (untested) | MT8195 | mt8195-cherry-* |
 | rk33xx | kevin | Samsung Chromebook Plus | RK3399 | rk3399-gru-* |
 | rk33xx | bob | Asus Chromebook Flip C101PA | RK3399 | rk3399-gru-* |
 
 Because DTBs are collected by glob, the family tarball implicitly covers
 every board those globs match — all kukui variants (Acer 311, Lenovo
-Duet, Lenovo 10e, ...), hana (Lenovo N23), and the gru boards — not just
+Duet, Lenovo 10e, ...), elm and hana, corsola, asurada, cherry, and the
+gru boards — not just
 the codenames listed. A device only needs its own `hardware_map.conf`
 row to be targetable by `[build:<codename>]` filters or to add a new
 DTB glob to its family; boards sharing an existing glob boot the
