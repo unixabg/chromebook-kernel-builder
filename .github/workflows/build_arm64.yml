@@ -573,8 +573,10 @@ jobs:
           DTS_VENDOR=$(echo "${{ matrix.platform }}" | cut -d- -f1)
           DTS_DIR="${KSRC}/arch/arm64/boot/dts/${DTS_VENDOR}"
           for DTB_PREFIX in ${{ matrix.dtb_prefixes }}; do
-            echo "Copying DTBs matching: ${DTS_DIR}/${DTB_PREFIX}-*.dtb"
-            find "${DTS_DIR}" -name "${DTB_PREFIX}-*.dtb" \
+            # Match the base board (<prefix>.dtb, e.g. mt8173-elm.dtb) and its
+            # variants (<prefix>-*.dtb, e.g. mt8173-elm-hana.dtb).
+            echo "Copying DTBs matching: ${DTS_DIR}/${DTB_PREFIX}.dtb and ${DTB_PREFIX}-*.dtb"
+            find "${DTS_DIR}" \( -name "${DTB_PREFIX}.dtb" -o -name "${DTB_PREFIX}-*.dtb" \) \
               -exec cp -v {} "${BOOT}/dtb-${kver}/" \;
           done
           DTB_COUNT=$(find "${BOOT}/dtb-${kver}" -name '*.dtb' | wc -l)

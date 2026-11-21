@@ -7,7 +7,7 @@
 #   boot/Image-${kver}
 #   boot/System.map-${kver}
 #   boot/config-${kver}
-#   boot/dtb-${kver}/<dtb-prefix>-*.dtb
+#   boot/dtb-${kver}/<dtb-prefix>.dtb and <dtb-prefix>-*.dtb
 #   boot/vmlinux.kpart-${kver}
 #   lib/modules/${kver}/
 #
@@ -122,13 +122,15 @@ cp -v System.map            "${BOOT}/System.map-${kver}"
 # DTBs - derive vendor dir from platform name (mediatek-mt81xx -> mediatek)
 DTB_VENDOR=$(echo "$PLATFORM" | cut -d- -f1)
 mkdir -p "${BOOT}/dtb-${kver}"
-echo "==> Copying DTBs matching: arch/arm64/boot/dts/${DTB_VENDOR}/${DTB_PREFIX}-*.dtb"
-find "arch/arm64/boot/dts/${DTB_VENDOR}" -name "${DTB_PREFIX}-*.dtb" \
+# Match the base board (<prefix>.dtb, e.g. mt8173-elm.dtb) and its
+# variants (<prefix>-*.dtb, e.g. mt8173-elm-hana.dtb).
+echo "==> Copying DTBs matching: arch/arm64/boot/dts/${DTB_VENDOR}/${DTB_PREFIX}.dtb and ${DTB_PREFIX}-*.dtb"
+find "arch/arm64/boot/dts/${DTB_VENDOR}" \( -name "${DTB_PREFIX}.dtb" -o -name "${DTB_PREFIX}-*.dtb" \) \
     -exec cp -v {} "${BOOT}/dtb-${kver}/" \;
 DTB_COUNT=$(find "${BOOT}/dtb-${kver}" -name '*.dtb' | wc -l)
 echo "==> Staged ${DTB_COUNT} DTB(s)"
 if [[ "$DTB_COUNT" -eq 0 ]]; then
-    echo "ERROR: no DTBs matching ${DTB_PREFIX}-*.dtb produced"
+    echo "ERROR: no DTBs matching ${DTB_PREFIX}.dtb or ${DTB_PREFIX}-*.dtb produced"
     echo "  Check kernel config, patches, and DTB_PREFIX in hardware_map.conf"
     exit 1
 fi
