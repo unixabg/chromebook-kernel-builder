@@ -1,5 +1,6 @@
 Patches for this platform are sourced automatically at build time from:
-  ARM64_EXTERNAL_REPO_URL (configs/kernel_versions.conf)
+  the hexdump0815 tree for this platform's flavor
+  (configs/arm64_flavors.conf, ARM64_EXTERNAL_REPO_URL_<REPO_KEY>)
   → misc.cbm/patches/v<series>/mt8183*.patch
   → misc.cbm/patches/v<series>/mt81xx*.patch
 

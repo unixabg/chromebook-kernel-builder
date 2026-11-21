@@ -100,26 +100,34 @@ The merge uses the kernel's own `scripts/kconfig/merge_config.sh`.
 
 ### ARM64
 
-The ARM64 pipeline replicates hexdump0815's exact build process, then adds
-local fixes and device overrides on top. Two repos are cloned at build time:
+The ARM64 pipeline replicates hexdump0815's build recipe for each kernel
+flavor, then adds local fixes on top. `configs/arm64_flavors.conf` maps each
+platform to its hexdump0815 flavor:
 
-```
-ARM64_EXTERNAL_REPO_URL_MEDIATEK  → linux-mainline-mediatek-mt81xx-kernel
-ARM64_KERNEL_CONFIG_OPTIONS_URL   → kernel-config-options
-```
+| Platform | Flavor | hexdump0815 tree |
+|---|---|---|
+| `mediatek-mt81xx` | cbm | `ARM64_EXTERNAL_REPO_URL_MEDIATEK` → linux-mainline-mediatek-mt81xx-kernel |
+| `rockchip-gru` | cbg | `ARM64_EXTERNAL_REPO_URL_GENERIC` → linux-mainline-and-mali-generic-stable-kernel |
+| `qcom-trogdor` | cbq | `ARM64_EXTERNAL_REPO_URL_GENERIC` → linux-mainline-and-mali-generic-stable-kernel |
 
-Layer order (mirrors hexdump0815's readme.mt8 pipeline exactly):
+The tree is cloned from `ARM64_EXTERNAL_REPO_BRANCH` (e.g. `lts-v6.18`), and
+`ARM64_KERNEL_CONFIG_OPTIONS_URL` (kernel-config-options) alongside it, all
+set in `configs/kernel_versions.conf`.
+
+Layer order (mirrors hexdump0815's readme.<flavor> recipe):
 
 ```
 Layer 0 — ARM64 DEFCONFIG
   arch/arm64/configs/defconfig
-  Standard ARM64 starting point, same as hexdump's pipeline.
+  The fragments below are merged onto this file itself, as in
+  hexdump's recipe (not onto an expanded "make defconfig" .config).
 
 Layer 1 — GENERIC CHROMEBOOK ARM64
   kernel-config-options/chromebooks-aarch64.cfg
 
 Layer 2 — PLATFORM SPECIFIC
-  kernel-config-options/mediatek.cfg  (or rockchip.cfg etc.)
+  kernel-config-options/<KCO_PLATFORM>.cfg from arm64_flavors.conf
+  (mediatek.cfg for cbm and cbq, none for cbg)
 
 Layer 3 — DOCKER / CONTAINER SUPPORT
   kernel-config-options/docker-options.cfg
@@ -128,7 +136,7 @@ Layer 4 — GENERIC REMOVALS
   kernel-config-options/options-to-remove-generic.cfg
 
 Layer 5 — PLATFORM REMOVALS
-  misc.cbm/options/options-to-remove-special.cfg
+  misc.<flavor>/options/options-to-remove-special.cfg
 
 Layer 6 — GENERIC ADDITIONS
   kernel-config-options/additional-options-generic.cfg
@@ -137,9 +145,12 @@ Layer 7 — ARM64 ADDITIONS
   kernel-config-options/additional-options-aarch64.cfg
 
 Layer 8 — PLATFORM ADDITIONS
-  misc.cbm/options/additional-options-special.cfg
+  misc.<flavor>/options/additional-options-special.cfg
 
-  make ARCH=arm64 olddefconfig run after all hexdump layers.
+  make ARCH=arm64 olddefconfig run after all hexdump layers. The config
+  at this point is compared with hexdump's shipped
+  config.<flavor>-<series>.* ("Compare config with hexdump0815" step,
+  warning only).
 
 Layer 9 — LOCAL PLATFORM CONFIG (our additions, applied LAST)
   configs/platform/<platform>.cfg
@@ -164,7 +175,7 @@ Layer 11 — DEVICE (per board codename, optional)
 
 Fallback: if `ARM64_KERNEL_CONFIG_OPTIONS_URL` is not set, the pipeline
 falls back to using `configs/base/<platform>.cfg` (if it contains CONFIG_
-lines) or hexdump's `config.cbm` directly.
+lines) or the newest `config.<flavor>-*` from hexdump's tree.
 
 The ARM64 merge is handled by `scripts/merge_kernel_config_arm64.sh`.
 
@@ -177,13 +188,15 @@ chromebook-kernel-builder/
 ├── configs/
 │   ├── hardware_map.conf            ← Maps codename → platform + kernel version
 │   ├── kernel_versions.conf         ← Kernel series + external repo URLs
+│   ├── arm64_flavors.conf           ← ARM64: platform → hexdump0815 flavor, tree, patches
 │   ├── base/
 │   │   ├── chromebooks-x86_64.cfg       ← Layer 0: full curated x86_64 base config
 │   │   ├── arm64-common-fixes.cfg       ← ARM64: fixes for hexdump pipeline (PR candidates)
 │   │   └── mediatek-mt81xx.cfg          ← ARM64: placeholder (populate to override hexdump base)
 │   ├── cmdline/
 │   │   ├── mediatek-mt81xx.cmdline  ← Kernel cmdline for mt81xx family kpart
-│   │   └── chromebook-kukui.cmdline ← Fallback cmdline
+│   │   ├── rockchip-gru.cmdline     ← Kernel cmdline for gru family kpart
+│   │   └── qcom-trogdor.cmdline     ← Kernel cmdline for trogdor family kpart
 │   ├── platform/
 │   │   ├── stoney-ridge.cfg             ← AMD Stoneyridge (TREEYA360/GRUNT)
 │   │   ├── amd-grunt.cfg                ← AMD GRUNT family
@@ -293,7 +306,7 @@ Builds run automatically every Sunday — x86_64 at 02:00 UTC, ARM64 at
 
 - **build.yml** — x86_64 Chromebooks, produces `.deb` packages
 - **build_arm64.yml** — ARM64 Chromebooks, one build per device family
-  (mt81xx, rk33xx), each producing a signed kpart tarball for velvet-os
+  (mt81xx, gru, trogdor), each producing a signed kpart tarball for velvet-os
 
 ---
 
@@ -528,57 +541,44 @@ config — keep it minimal.
 
 ### Adding a new ARM64 device
 
-ARM64 builds run entirely through GitHub Actions — there is no local build
-script. Adding a device means adding config files; the CI pipeline handles
-the rest.
+ARM64 kernels are built per family by GitHub Actions (`build_arm64.yml`)
+from hexdump0815's trees, cloned at build time — do not copy or maintain
+any of those files here. `scripts/build_kernel_arm64.sh` builds locally
+from a kernel tree you have already prepared.
 
-**Config layering for ARM64** — understand this before creating files:
+**Our own layers** are applied after all of hexdump's, so keep them minimal
+— if hexdump already provides an option correctly, don't repeat it:
 
-The pipeline replicates hexdump0815's exact build process using two repos
-cloned automatically at build time — you do not need to copy or maintain
-any of those files. Your only contributions are:
+- `configs/base/arm64-common-fixes.cfg` — fixes for all ARM64 builds that
+  should eventually be PRed back to hexdump0815
+- `configs/platform/<platform>.cfg` — options one family needs regardless
+  of hexdump's stack (optional, e.g. `configs/platform/mediatek-mt81xx.cfg`)
+- `configs/device/<family>.cfg` — the workflow passes the family name
+  (e.g. `mt81xx`), so this applies to the whole family, not one board
 
-- `configs/base/arm64-common-fixes.cfg` — for fixes that apply to all ARM64
-  builds and should eventually be PRed back to hexdump0815
-- `configs/platform/<platform>.cfg` — guarantees critical options for an
-  SoC family regardless of what hexdump's stack provides. Create one when
-  adding a new platform (e.g. `configs/platform/rockchip-rk33xx.cfg`)
-- `configs/device/<codename>.cfg` — for options specific to one board that
-  hexdump's full stack doesn't set correctly
-
-Both are applied last, after all of hexdump's layers, so they cannot be
-overridden. Keep device configs minimal — if hexdump already provides it
-correctly, don't repeat it here.
-
-**Files to edit or create:**
-
-| File | Required | What to do |
-|---|---|---|
-| `configs/hardware_map.conf` | ✅ | Add one line for your board |
-| `configs/device/<codename>.cfg` | ✅ | Create with board-specific overrides only (can be empty) |
-| `configs/cmdline/<codename>.cmdline` | only if needed | Create if your board needs different kernel parameters than the platform default |
-| `patches/<platform>/` | only if needed | Drop a `.patch` file here for device-specific kernel patches |
-
-**`hardware_map.conf` entry for ARM64:**
+**A board in an existing family** — add one line to `configs/hardware_map.conf`:
 ```
 myboard|mediatek-mt81xx|default|none|arm64|mt8183-kukui|Acme Chromebook ARM
 ```
 
-Note: `ARCH` must be `arm64` and `DTB_PREFIX` must match the DTB glob prefix
-for your SoC (e.g. `mt8183-kukui`, `rk3399-gru`) — this is what tells the
-build workflow which device tree blobs to include in the kpart.
+`ARCH` must be `arm64`. `DTB_PREFIX` selects `<prefix>.dtb` and
+`<prefix>-*.dtb` from the kernel's device trees (e.g. `mt8173-elm` gives
+`mt8173-elm.dtb`, `mt8173-elm-hana.dtb`, ...). If the family already has
+that prefix, the row only makes the board targetable by `[build:<codename>]`;
+a new prefix adds its DTBs to the family kernel. The fourth field names a
+`patches/<patch_dir>/` for local patches, or `none`.
 
-**Platform-level patches** (mt8183 and mt81xx patches) are automatically
-pulled from the upstream hexdump0815 repo at build time — you do not need
-to include those. Only add patches to `patches/<platform>/` if your device
-needs something board-specific on top of the upstream set.
+**A new family** — in addition to its `hardware_map.conf` rows:
 
-**Cmdline fallback order** — the build looks for cmdline files in this order:
-1. `configs/cmdline/<codename>.cmdline` — your device
-2. `configs/cmdline/<platform>.cmdline` — your platform
-3. `configs/cmdline/chromebook-kukui.cmdline` — generic MT8183 fallback
+| File | What to do |
+|---|---|
+| `configs/arm64_flavors.conf` | Map the platform to its hexdump0815 flavor, tree, kernel-config-options fragment and tree patches, copied from `readme.<flavor>` on the lts branch |
+| `configs/kernel_versions.conf` | Add `ARM64_EXTERNAL_REPO_URL_<REPO_KEY>` if the flavor lives in a tree not listed yet |
+| `configs/cmdline/<platform>.cmdline` | Required — the build fails without it. hexdump's is in `misc.<flavor>/misc/cmdline` |
 
-If the generic kukui cmdline works for your board, no cmdline file is needed.
+Patches from hexdump's tree are applied automatically. After a build,
+check the "Compare config with hexdump0815" step: differences there mean
+the result does not match hexdump's own kernel.
 
 ---
 

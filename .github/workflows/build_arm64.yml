@@ -404,7 +404,7 @@ jobs:
           git clone --depth=1 "$KCO_URL" "$KCO_DIR"
           echo "ARM64_KCO_DIR=${KCO_DIR}" >> "$GITHUB_ENV"
 
-          # Check for patch subdir - naming varies by repo (misc.cbm, misc.rkc etc.)
+          # Find the versioned patch dir for soc-glob flavors: misc.<flavor>/patches/v<series>
           # NOTE: uses ARM64_EXT_DIR exported by the previous step via GITHUB_ENV
           # (a bare EXT_DIR here is unset - that bug silently skipped all
           # external patches). Falls back to the nearest lower version dir if
@@ -617,9 +617,9 @@ jobs:
 
       # --------------------------------------------------------
       # Package
-      # Cmdline lookup order (first match wins):
-      #   configs/cmdline/<platform>.cmdline
-      #   configs/cmdline/chromebook-kukui.cmdline   (fallback)
+      # Cmdline: configs/cmdline/<platform>.cmdline - required, the
+      # build fails without it (no fallback: a wrong root= or console=
+      # gives an unbootable kernel).
       # One cmdline per family: all velvet-os devices share the
       # same partition layout. A device needing different kernel
       # parameters needs its own platform value in hardware_map.conf.
@@ -677,18 +677,10 @@ jobs:
             "${STAGE}/kernel.itb"
 
           # Cmdline lookup
-          CMDLINE_FILE=""
-          for candidate in \
-              "configs/cmdline/${PLATFORM}.cmdline" \
-              "configs/cmdline/chromebook-kukui.cmdline"; do
-            if [[ -f "$candidate" ]]; then
-              CMDLINE_FILE="$candidate"
-              echo "Using cmdline: $CMDLINE_FILE"
-              break
-            fi
-          done
-          [[ -z "$CMDLINE_FILE" ]] && \
-            { echo "ERROR: no cmdline found for ${PLATFORM}"; exit 1; }
+          CMDLINE_FILE="configs/cmdline/${PLATFORM}.cmdline"
+          [[ -f "$CMDLINE_FILE" ]] || \
+            { echo "ERROR: $CMDLINE_FILE not found"; exit 1; }
+          echo "Using cmdline: $CMDLINE_FILE"
 
           vbutil_kernel \
             --pack "${BOOT}/vmlinux.kpart-${kver}" \

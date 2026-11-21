@@ -5,16 +5,17 @@
 # ARM64-only config merge. Replicates hexdump0815's exact pipeline then
 # applies local fixes and device overrides on top.
 #
-# Strategy (mirrors hexdump0815 readme.mt8 pipeline):
-#   1. ARM64 defconfig as starting point
+# Strategy (mirrors hexdump0815 readme.<flavor> recipe; flavor, misc dir and
+# platform fragment come from configs/arm64_flavors.conf):
+#   1. arch/arm64/configs/defconfig as merge base
 #   2. kernel-config-options/chromebooks-aarch64.cfg
-#   3. kernel-config-options/<platform-short>.cfg  (e.g. mediatek.cfg)
+#   3. kernel-config-options/<KCO_PLATFORM>.cfg  (e.g. mediatek.cfg, or none)
 #   4. kernel-config-options/docker-options.cfg
 #   5. kernel-config-options/options-to-remove-generic.cfg
-#   6. misc.cbm/options/options-to-remove-special.cfg
+#   6. misc.<flavor>/options/options-to-remove-special.cfg
 #   7. kernel-config-options/additional-options-generic.cfg
 #   8. kernel-config-options/additional-options-aarch64.cfg
-#   9. misc.cbm/options/additional-options-special.cfg
+#   9. misc.<flavor>/options/additional-options-special.cfg
 #  10. make ARCH=arm64 olddefconfig
 #  11. configs/base/arm64-common-fixes.cfg  (our fixes, applied LAST)
 #  12. configs/device/<codename>.cfg        (device overrides, applied LAST)
@@ -63,26 +64,24 @@ KMERGE="${KERNEL_SRC}/scripts/kconfig/merge_config.sh"
 KCO_DIR="${ARM64_KCO_DIR:-}"
 EXT_DIR="${ARM64_EXT_DIR:-}"
 
-# Misc subdir in the external repo: misc.<flavor> from configs/arm64_flavors.conf
-# (exported by the workflow as ARM64_FLAVOR). Without it, fall back to the
-# old search order for local builds.
+# Flavor and kernel-config-options platform fragment: exported by the
+# workflow (ARM64_FLAVOR, ARM64_KCO_PLATFORM), otherwise read from
+# configs/arm64_flavors.conf so local builds use the same mapping.
+if [[ -z "${ARM64_FLAVOR:-}" ]]; then
+    FLAVOR_ROW=$(grep -v '^\s*#' "${REPO_DIR}/configs/arm64_flavors.conf" | grep "^${PLATFORM}|" || true)
+    [[ -z "$FLAVOR_ROW" ]] && { log "ERROR: platform '$PLATFORM' not in configs/arm64_flavors.conf"; exit 1; }
+    IFS='|' read -r _ ARM64_FLAVOR _ ARM64_KCO_PLATFORM _ <<< "$FLAVOR_ROW"
+fi
+log "Flavor: ${ARM64_FLAVOR}, kernel-config-options fragment: ${ARM64_KCO_PLATFORM:-none}"
+
 MISC_OPTIONS_DIR=""
-if [[ -n "$EXT_DIR" && -n "${ARM64_FLAVOR:-}" ]]; then
+if [[ -n "$EXT_DIR" ]]; then
     MISC_OPTIONS_DIR="${EXT_DIR}/misc.${ARM64_FLAVOR}/options"
     [[ -d "$MISC_OPTIONS_DIR" ]] || { log "ERROR: $MISC_OPTIONS_DIR not found"; exit 1; }
-elif [[ -n "$EXT_DIR" ]]; then
-    for subdir in misc.cbm misc.rkc misc.rk3 misc; do
-        if [[ -d "${EXT_DIR}/${subdir}/options" ]]; then
-            MISC_OPTIONS_DIR="${EXT_DIR}/${subdir}/options"
-            break
-        fi
-    done
 fi
 
-# kernel-config-options platform fragment: ARM64_KCO_PLATFORM from
-# configs/arm64_flavors.conf ("none" = no fragment). Without it, derive
-# from the platform name for local builds: mediatek-mt81xx -> mediatek
-PLATFORM_SHORT="${ARM64_KCO_PLATFORM:-$(echo "$PLATFORM" | cut -d- -f1)}"
+# kernel-config-options platform fragment ("none" = no fragment)
+PLATFORM_SHORT="${ARM64_KCO_PLATFORM:-none}"
 
 # =============================================================================
 # Primary pipeline: replicate hexdump0815's exact layer order
@@ -105,8 +104,8 @@ if [[ -n "$KCO_DIR" ]]; then
         FRAGMENTS+=("${KCO_DIR}/chromebooks-aarch64.cfg") && \
         log "  + chromebooks-aarch64.cfg"
 
-    # <platform>.cfg - platform-specific options (mediatek.cfg, rockchip.cfg etc.)
-    [[ -f "${KCO_DIR}/${PLATFORM_SHORT}.cfg" ]] && \
+    # <KCO_PLATFORM>.cfg - platform-specific options (e.g. mediatek.cfg)
+    [[ "$PLATFORM_SHORT" != "none" && -f "${KCO_DIR}/${PLATFORM_SHORT}.cfg" ]] && \
         FRAGMENTS+=("${KCO_DIR}/${PLATFORM_SHORT}.cfg") && \
         log "  + ${PLATFORM_SHORT}.cfg"
 
@@ -175,18 +174,8 @@ else
         cp "$BASE_CONFIG" .config
     elif [[ -n "$EXT_DIR" ]]; then
         log "Searching external repo for base config..."
-        EXT_CONFIG=""
-        for candidate in \
-            "${EXT_DIR}/config.cbm" \
-            "${EXT_DIR}/config.rkc" \
-            "${EXT_DIR}/config.rk3" \
-            "${EXT_DIR}/config.mt8" \
-            "${EXT_DIR}/config.mt7"; do
-            if [[ -f "$candidate" ]]; then
-                EXT_CONFIG="$candidate"
-                break
-            fi
-        done
+        # newest config.<flavor>-<version>* hexdump ships in the tree
+        EXT_CONFIG=$(ls -1 "${EXT_DIR}"/config."${ARM64_FLAVOR}"-* 2>/dev/null | sort -V | tail -1 || true)
         [[ -z "$EXT_CONFIG" ]] && { log "ERROR: no base config found"; exit 1; }
         log "Using external base config: $(basename "$EXT_CONFIG")"
         cp "$EXT_CONFIG" .config

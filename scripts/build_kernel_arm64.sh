@@ -138,12 +138,11 @@ fi
 # ── ChromeOS FIT image (vmlinux.kpart) ───────────────────────────────────────
 echo "==> Creating vmlinux.kpart..."
 
-# Cmdline - look for codename, then platform, then generic fallback
+# Cmdline - look for codename, then platform (no generic fallback)
 CMDLINE_FILE=""
 for f in \
     "${REPO_DIR}/configs/cmdline/${CODENAME}.cmdline" \
-    "${REPO_DIR}/configs/cmdline/${PLATFORM}.cmdline" \
-    "${REPO_DIR}/configs/cmdline/chromebook-kukui.cmdline"; do
+    "${REPO_DIR}/configs/cmdline/${PLATFORM}.cmdline"; do
     if [[ -f "$f" ]]; then
         CMDLINE_FILE="$f"
         echo "==> Using cmdline: $(basename "$f")"
